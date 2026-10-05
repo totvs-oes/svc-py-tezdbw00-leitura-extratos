@@ -14,7 +14,7 @@ SEM_LAYOUT = ("TARIFAS BB", "TARIFAS ITAU")
 ARQUIVOS_TESTE = sorted(p for p in PASTA_EXEMPLOS.glob("*.pdf") if not p.name.upper().startswith(SEM_LAYOUT))
 
 
-def _sem_leitura(nome_arquivo: str, aviso: str) -> tuple[str, ExtratoConta]:
+def sem_leitura(nome_arquivo: str, aviso: str) -> tuple[str, ExtratoConta]:
     extrato = ExtratoConta(arquivo=nome_arquivo, metodo="nenhum", conta=None, lancamentos=[],
                            aviso=aviso, conferencia=conferir([], None, None))
     return f"banco_{identificar_banco('', nome_arquivo) or 'desconhecido'}", extrato
@@ -33,7 +33,7 @@ def transcrever_pdf(nome_arquivo: str, origem: Union[str, bytes]) -> tuple[str, 
 
     # PDF sem camada de texto (escaneado ou exportado como imagem): nem layout nem IA conseguem ler
     if not texto_completo.strip():
-        return _sem_leitura(nome_arquivo, "PDF sem texto (escaneado ou exportado como imagem). "
+        return sem_leitura(nome_arquivo, "PDF sem texto (escaneado ou exportado como imagem). "
                                           "É necessário OCR para ler este arquivo.")
 
     # Layout conhecido: parser determinístico. Desconhecido: IA como fallback
@@ -129,7 +129,7 @@ def conferir(lancamentos: list[Lancamento], saldo_anterior: Optional[float], sal
     )
 
 
-def _agrupar_por_banco(extratos: list[tuple[str, ExtratoConta]]) -> dict[str, list[ExtratoConta]]:
+def agrupar_por_banco(extratos: list[tuple[str, ExtratoConta]]) -> dict[str, list[ExtratoConta]]:
     resultado: dict[str, list[ExtratoConta]] = defaultdict(list)
     for chave, extrato in extratos:
         resultado[chave].append(extrato)
@@ -138,9 +138,9 @@ def _agrupar_por_banco(extratos: list[tuple[str, ExtratoConta]]) -> dict[str, li
 
 def transcrever(filtro: Optional[str] = None) -> dict[str, list[ExtratoConta]]:
     arquivos = [a for a in ARQUIVOS_TESTE if not filtro or filtro.upper() in a.name.upper()]
-    return _agrupar_por_banco([transcrever_arquivo(arquivo) for arquivo in arquivos])
+    return agrupar_por_banco([transcrever_arquivo(arquivo) for arquivo in arquivos])
 
 
 def transcrever_uploads(arquivos: list[tuple[str, bytes]]) -> dict[str, list[ExtratoConta]]:
     """Lê os PDFs enviados por upload: lista de (nome do arquivo, conteúdo)."""
-    return _agrupar_por_banco([transcrever_pdf(nome, conteudo) for nome, conteudo in arquivos])
+    return agrupar_por_banco([transcrever_pdf(nome, conteudo) for nome, conteudo in arquivos])

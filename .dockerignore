@@ -1,0 +1,25 @@
+# Ambiente local e segredos
+sftp/
+venv/
+.venv/
+.env
+__pycache__/
+*.pyc
+.git/
+.gitignore
+
+# Ferramentas e documentação local
+.claude/
+CLAUDE.md
+
+# Extratos reais de exemplo NÃO vão para a imagem (dados bancários do cliente)
+docs_example/
+
+# Script que roda no servidor do cliente, não na API
+cliente/
+*.log
+
+# Arquivos do próprio Docker
+Dockerfile
+.dockerignore
+docker-compose.yml

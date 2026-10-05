@@ -7,7 +7,7 @@ e instantâneo. PDFs que não casam com nenhum layout caem no fallback com IA.
 """
 import re
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 from schemas.extrato import Lancamento, MovimentacaoNaoListada
 from services.normalizacao import (eh_linha_de_saldo, normalizar_data, parse_saldo,
@@ -48,6 +48,8 @@ class Layout:
     saldo_da_conta: Optional[str] = None
     # Históricos que indicam aplicação automática (justificam a movimentação não listada)
     aplicacao_automatica: Optional[str] = None
+    # Extrato sem tabela de colunas (ex.: Daycoval): parser próprio no lugar do de colunas
+    parser: Optional[Callable[[list[list[Linha]], "Layout", str, Optional[str]], "ResultadoLayout"]] = None
 
 
 LAYOUTS: list[Layout] = [
@@ -126,6 +128,13 @@ LAYOUTS: list[Layout] = [
                  Coluna("Documento", CONCATENAR), Coluna("Valor", VALOR), Coluna("Saldo", SALDO)],
         conta=r"Conta:\s*(\d+)",
         fim_da_tabela=r"^A - SALDO",
+    ),
+    Layout(
+        nome="Daycoval", codigo_banco="0707",
+        identificacao=r"DAYCOVAL|DAYCONNECT",
+        colunas=[],  # sem tabela: cada lançamento é uma linha "dd/mm HISTÓRICO COMPLEMENTO  [-]R$ valor"
+        conta=r"Conta Corrente\s*\n\s*(\d[\d-]*)",
+        parser=lambda paginas, layout, texto, ano: extrair_daycoval(paginas, layout, texto, ano),
     ),
 ]
 
@@ -246,6 +255,8 @@ class ResultadoLayout:
 
 
 def extrair_com_layout(paginas: list[list[Linha]], layout: Layout, texto: str, ano: Optional[str]) -> ResultadoLayout:
+    if layout.parser:
+        return layout.parser(paginas, layout, texto, ano)
     resultado = ResultadoLayout(conta=_extrair_conta(layout, texto))
 
     faixas: Optional[list[_Faixa]] = None
@@ -375,3 +386,59 @@ def _extrair_conta(layout: Layout, texto: str) -> Optional[str]:
         # Caixa: "XXXX | XXXX | XXXXXXXXXX-X" -> a conta é o último item
         return conta.split("|")[-1].strip()
     return None
+
+
+# ---------------------------------------------------------------------------
+# Daycoval (Dayconnect): extrato em blocos, sem cabeçalho de colunas
+# ---------------------------------------------------------------------------
+#
+#   Saldo anterior                                   R$ 304.965,75
+#   Saldo atual                                      R$ 320.049,70
+#   Quinta-feira, 03 de setembro                     Saldo: R$ 320.049,70   <- saldo do fim do dia (não usado)
+#   03/09 TRANSF.MESMA TITULARIDADE   8666220 - ...  R$ 100.691,20          <- crédito (sem sinal)
+#   01/09 TARIFA DE MANUTENCAO DE C/C 9232818        -R$ 43,79              <- débito
+#
+# Os dias vêm do mais recente para o mais antigo; a saída fica em ordem cronológica, como nos outros bancos.
+
+RE_DAYCOVAL_VALOR = re.compile(r"-?R\$\s*[\d.]+,\d{2}")
+RE_DAYCOVAL_LANCAMENTO = re.compile(r"^(\d{2}/\d{2})\s+(.+?)\s+(-?R\$\s*[\d.]+,\d{2})$")
+RE_DAYCOVAL_PERIODO = re.compile(r"(\d{2}/\d{2}/\d{4})\s+A\s+(\d{2}/\d{2}/\d{4})")
+
+
+def _ano_no_periodo(data_curta: str, periodo: Optional[tuple[str, str]], ano: Optional[str]) -> Optional[str]:
+    """Ano do lançamento "dd/mm". Período que vira o ano (29/12 a 04/01): mês maior que o final = ano inicial."""
+    if not periodo:
+        return ano
+    inicio, fim = periodo
+    return inicio[6:] if int(data_curta[3:5]) > int(fim[3:5]) else fim[6:]
+
+
+def extrair_daycoval(paginas: list[list[Linha]], layout: Layout, texto: str, ano: Optional[str]) -> ResultadoLayout:
+    resultado = ResultadoLayout(conta=_extrair_conta(layout, texto))
+    periodo = RE_DAYCOVAL_PERIODO.search(sem_acentos(texto))
+    periodo = periodo.groups() if periodo else None
+
+    lancamentos: list[Lancamento] = []
+    for pagina in paginas:
+        for linha in pagina:
+            texto_linha = " ".join(renderizar(linha).split())
+            normalizada = sem_acentos(texto_linha)
+            valor_da_linha = RE_DAYCOVAL_VALOR.search(texto_linha)
+            # O sinal vem antes do "R$" ("-R$ 43,79"): só o trecho do valor vai para o parse
+            if normalizada.startswith("SALDO ANTERIOR ") and valor_da_linha:
+                resultado.saldo_anterior = parse_saldo(valor_da_linha.group())
+            elif normalizada.startswith("SALDO ATUAL ") and valor_da_linha:
+                resultado.saldo_final = parse_saldo(valor_da_linha.group())
+            elif match := RE_DAYCOVAL_LANCAMENTO.match(texto_linha):
+                data_curta, historico, texto_valor = match.groups()
+                valor, operacao = parse_valor(texto_valor)
+                if not valor:
+                    continue
+                lancamentos.append(Lancamento(
+                    data=normalizar_data(data_curta, _ano_no_periodo(data_curta, periodo, ano)),
+                    historico=historico, operacao=operacao or "credito", valor=valor))
+
+    # A conferência (saldo anterior + lançamentos = saldo atual) pega lançamento que ficou de fora
+    resultado.lancamentos = list(reversed(lancamentos))
+    return resultado
+

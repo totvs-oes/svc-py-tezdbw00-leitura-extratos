@@ -1,0 +1,48 @@
+name: svc-py-tezdbw00-leitura-extratos
+
+services:
+  leitura-extratos:
+    build: .
+    image: svc-py-tezdbw00-leitura-extratos:latest
+    container_name: leitura-extratos
+    # format: raw = valores lidos ao pé da letra (token com "$" não vira variável do Compose)
+    env_file:
+      - path: .env
+        format: raw
+    environment:
+      # Dentro do Docker, o Ollama é o container "ollama" (perfil "ia"), não o localhost
+      OLLAMA_BASE_URL: http://ollama:11434
+      # Arquivos da pasta ./sftp (montada abaixo)
+      SFTP_KNOWN_HOSTS: /run/sftp/known_hosts
+    volumes:
+      - ./sftp:/run/sftp:ro
+    ports:
+      - "5000:5000"
+    restart: unless-stopped
+    networks:
+      - tezdbw00
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    profiles: ["ia"]
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+    networks:
+      - tezdbw00
+    # Com GPU NVIDIA no servidor (requer nvidia-container-toolkit), descomente:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+networks:
+  tezdbw00:
+    name: tezdbw00
+
+volumes:
+  ollama:
