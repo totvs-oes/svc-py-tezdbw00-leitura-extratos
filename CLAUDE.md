@@ -9,7 +9,11 @@ Consumida pelo robô de conciliação: repo irmão `../bot-py-tezdbw00-conciliac
 python -m venv venv && venv\Scripts\pip install -r requirements.txt
 venv\Scripts\python main.py        # API em http://localhost:5000, docs em /docs
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File cliente\enviar_extratos.ps1 -Token <TOKEN>
+venv\Scripts\pip install -r requirements-dev.txt && venv\Scripts\python -m pytest   # testes
+venv\Scripts\python -m tests.regressao   # regrava a referência dos layouts (só após mudar um layout DE PROPÓSITO)
 ```
+
+Testes: `tests/test_layouts.py` compara a leitura de cada PDF de `docs_example/` com `tests/fixtures/esperado_layouts.json` (totais, saldos e SHA-256 dos lançamentos, sem o texto dos extratos); sem a pasta, esses testes são pulados. A IA nunca é chamada nos testes.
 
 `.env` (modelo em `.env.example`): `TOKEN` (Bearer das rotas), `LLM_BASE_API_URL` (proxy de IA da TOTVS), `TOKEN_API_LLM`, `LLM_MODEL` (padrão `gpt-4o`), `SFTP_*` (servidor do cliente).
 `requirements.txt` está em **UTF-16** (gerado por `pip freeze` no PowerShell): ao editar, preserve a codificação.
