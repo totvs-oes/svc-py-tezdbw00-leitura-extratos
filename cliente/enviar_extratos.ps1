@@ -139,7 +139,7 @@ foreach ($pdf in $pdfs) {
         Escrever-Log "REJEITADO $($pdf.Name) (HTTP $codigo) -> erro: $corpo"
         $falhas++
     } else {
-        # 401 (token), 5xx (API fora do ar, Ollama...): problema temporario ou de configuracao
+        # 401 (token), 5xx (API fora do ar, IA indisponivel...): problema temporario ou de configuracao
         Escrever-Log "FALHA $($pdf.Name) (HTTP $codigo): $corpo. Tenta de novo na proxima execucao."
         $falhas++
     }

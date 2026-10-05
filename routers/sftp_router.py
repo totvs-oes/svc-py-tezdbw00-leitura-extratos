@@ -1,9 +1,9 @@
 import posixpath
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from httpx import ConnectError
 from pydantic import BaseModel, Field
 
+from llm.erros import ErroIA
 from schemas.extrato import ExtratoConta
 from security.security import verify_token
 from services import sftp_service
@@ -78,5 +78,5 @@ def _ler_um(sftp, relativo: str, remoto: str):
         return sem_leitura(nome, "O arquivo não é um PDF.")
     try:
         return transcrever_pdf(nome, conteudo)
-    except (ConnectionError, ConnectError):
-        return sem_leitura(nome, "Layout desconhecido e a IA (Ollama) está fora do ar: arquivo não lido.")
+    except ErroIA as erro:
+        return sem_leitura(nome, f"Layout desconhecido e a IA não está disponível ({erro}): arquivo não lido.")

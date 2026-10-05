@@ -9,6 +9,7 @@ BANCOS = {
     "0104": ["CAIXA"],
     "0237": ["BRADESCO"],
     "0246": ["ABC BRASIL", "BANCO ABC", "ABC "],
+    "0260": ["NUBANK", "NU PAGAMENTOS"],
     "0336": ["C6 BANK", "BANCO C6"],
     "0341": ["ITAU"],
     "0422": ["SAFRA"],
@@ -18,6 +19,8 @@ BANCOS = {
 RE_VALOR = re.compile(r"\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2}")
 RE_DATA_COMPLETA = re.compile(r"\b(\d{2})/(\d{2})/(\d{4})\b")
 RE_DATA_CURTA = re.compile(r"^(\d{2})/(\d{2})$")
+RE_DATA_MES_ESCRITO = re.compile(r"^(\d{1,2})\s+(?:DE\s+)?([A-Z]{3,9})\.?(?:\s+(?:DE\s+)?(\d{4}))?$")
+MESES_ABREVIADOS = ["JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AGO", "SET", "OUT", "NOV", "DEZ"]
 # Linhas de saldo que a LLM às vezes deixa passar. "SALDO VINCULADO LIBERADO" é movimentação real.
 RE_SALDO = re.compile(r"^(S\s?A\s?L\s?D\s?O)\b(?!\s+VINCULADO)")
 
@@ -26,9 +29,27 @@ def sem_acentos(texto: str) -> str:
     return unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode().upper()
 
 
-def identificar_banco(texto: str, nome_arquivo: str) -> Optional[str]:
-    """Identifica o banco de forma determinística (nome do arquivo primeiro, depois o conteúdo)."""
-    for fonte in (sem_acentos(nome_arquivo), sem_acentos(texto)):
+def zona_de_identificacao(paginas: list[str], linhas_topo: int = 8, linhas_rodape: int = 6) -> str:
+    """Cabeçalho da 1ª página + rodapé de cada página: onde o extrato diz de que banco é.
+
+    O corpo fica de fora de propósito: nele aparecem os bancos das CONTRAPARTES
+    (ex.: "Transferência Pix ... CAIXA ECONOMICA FEDERAL (0104) Agência: ..." num extrato do Nubank).
+    """
+    trechos = []
+    for numero, pagina in enumerate(paginas):
+        linhas = [l for l in pagina.splitlines() if l.strip()]
+        if numero == 0:
+            trechos += linhas[:linhas_topo]
+        trechos += linhas[-linhas_rodape:]
+    return "\n".join(trechos)
+
+
+def identificar_banco(zona: str, nome_arquivo: str) -> Optional[str]:
+    """Identifica o banco de forma determinística: nome do arquivo primeiro, depois a zona de identificação.
+
+    Passe a zona_de_identificacao(), não o texto inteiro: o corpo cita os bancos das contrapartes.
+    """
+    for fonte in (sem_acentos(nome_arquivo), sem_acentos(zona)):
         for codigo, termos in BANCOS.items():
             if any(termo in fonte for termo in termos):
                 return codigo
@@ -76,6 +97,12 @@ def normalizar_data(data: Optional[str], ano: Optional[str]) -> Optional[str]:
         return match.group(0)
     if (match := RE_DATA_CURTA.match(data)) and ano:
         return f"{match.group(1)}/{match.group(2)}/{ano}"
+    # Mês por extenso/abreviado (Nubank: "02 SET 2026")
+    if match := RE_DATA_MES_ESCRITO.match(sem_acentos(data)):
+        dia, mes, ano_data = match.groups()
+        ano_data = ano_data or ano
+        if mes[:3] in MESES_ABREVIADOS and ano_data:
+            return f"{int(dia):02d}/{MESES_ABREVIADOS.index(mes[:3]) + 1:02d}/{ano_data}"
     return data
 
 

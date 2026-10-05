@@ -1,8 +1,8 @@
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from httpx import ConnectError
 
+from llm.erros import ErroIA
 from schemas.extrato import ExtratoConta
 from security.security import verify_token
 from services.transcribe_service import transcrever
@@ -17,5 +17,5 @@ def transcribe_pdf(
 ):
     try:
         return transcrever(arquivo)
-    except (ConnectionError, ConnectError):
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Não foi possível conectar ao Ollama.")
+    except ErroIA as erro:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, f"IA indisponível: {erro}")

@@ -139,12 +139,23 @@ LAYOUTS: list[Layout] = [
 ]
 
 
-def identificar_layout(nome_arquivo: str, texto: str) -> Optional[Layout]:
-    # Primeiro pelo nome do arquivo, depois pelo conteúdo (um histórico pode citar outro banco)
-    for alvo in (sem_acentos(nome_arquivo), sem_acentos(texto)):
-        if layout := next((l for l in LAYOUTS if re.search(l.identificacao, alvo)), None):
-            return layout
-    return None
+def identificar_layout(nome_arquivo: str, zona: str, paginas: Optional[list[list[Linha]]] = None) -> Optional[Layout]:
+    """Layout do extrato, ou None (vai para a IA).
+
+    Candidatos: pelo nome do arquivo, depois pela zona de identificação (cabeçalho/rodapés, ver
+    normalizacao.zona_de_identificacao). Um candidato só vale se o cabeçalho da tabela dele existir
+    no PDF: sem essa confirmação, um layout errado devolveria zero lançamentos sem avisar.
+    """
+    candidatos: list[Layout] = []
+    for alvo in (sem_acentos(nome_arquivo), sem_acentos(zona)):
+        candidatos += [l for l in LAYOUTS if re.search(l.identificacao, alvo) and l not in candidatos]
+    return next((l for l in candidatos if paginas is None or _confirmado(l, paginas)), None)
+
+
+def _confirmado(layout: Layout, paginas: list[list[Linha]]) -> bool:
+    if layout.parser:  # sem tabela de colunas (Daycoval): vale a identificação
+        return True
+    return any(_localizar_cabecalho(linha, layout) is not None for pagina in paginas for linha in pagina)
 
 
 # ---------------------------------------------------------------------------

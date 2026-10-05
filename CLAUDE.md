@@ -11,14 +11,13 @@ venv\Scripts\python main.py        # API em http://localhost:5000, docs em /docs
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File cliente\enviar_extratos.ps1 -Token <TOKEN>
 ```
 
-`.env` (modelo em `.env.example`): `TOKEN` (Bearer das rotas), `OLLAMA_BASE_URL`, `OLLAMA_MODEL` (padrão `qwen3:1.7b`), `SFTP_*` (servidor do cliente).
+`.env` (modelo em `.env.example`): `TOKEN` (Bearer das rotas), `LLM_BASE_API_URL` (proxy de IA da TOTVS), `TOKEN_API_LLM`, `LLM_MODEL` (padrão `gpt-4o`), `SFTP_*` (servidor do cliente).
 `requirements.txt` está em **UTF-16** (gerado por `pip freeze` no PowerShell): ao editar, preserve a codificação.
 
 ### Docker (produção)
 
 ```
 docker compose up -d --build                 # API na porta 5000; cria a rede "tezdbw00" usada pelo robô
-docker compose --profile ia up -d --build    # + Ollama em container (fallback de IA)
 ```
 
 - A imagem **não** leva `docs_example/` (extratos reais do cliente), `cliente/`, `sftp/` (chave e known_hosts) nem `.env` — ver `.dockerignore`.
@@ -51,7 +50,7 @@ services/layouts.py            um Layout por banco (cabeçalhos das colunas -> f
 services/normalizacao.py       valores/datas em formato BR, identificação do banco (código COMPE)
 services/sftp_service.py       conexão SFTP com o servidor do cliente: listar e baixar (em memória)
 services/transcribe_service.py orquestra: sem texto -> aviso | layout conhecido -> parser | senão -> IA; conferência de saldo
-llm/llm.py                     fallback com Ollama (structured output, uma chamada por página)
+llm/llm.py                     fallback com IA: ChatOpenAI no proxy da TOTVS (structured output json_schema, uma chamada por página)
 schemas/extrato.py             contrato da resposta
 routers/                       sftp_router (listar e ler do SFTP), extratos_router (upload), transcribe_router (teste)
 cliente/                       script que roda no Windows Server do cliente: entrada -> API -> lidos | erro
@@ -63,8 +62,10 @@ Layouts: Tarifas ABC, ABC, Caixa, Banco do Brasil, Bradesco, Itaú, Safra, Santa
 
 - Código e nomes em português.
 - **Banco novo = novo `Layout` em `services/layouts.py`**, com os cabeçalhos das colunas exatamente como no PDF. Valide com os PDFs de `docs_example/`: a conferência precisa dar `ok: true`.
+- **Identificação do banco/layout só pelo nome do arquivo + cabeçalho da 1ª página + rodapés** (`normalizacao.zona_de_identificacao`). O corpo do extrato cita os bancos das contrapartes ("Pix ... CAIXA ECONOMICA FEDERAL (0104)"). E um layout só é aplicado se o cabeçalho da tabela dele existir no PDF; senão o arquivo vai para a IA.
 - **A conferência de saldo é o critério de qualidade**: saldo anterior + créditos − débitos = saldo final, ao centavo. Nunca force a conferência a passar. Movimentação não listada (`saldo_da_conta`) só conta como explicada se houver aplicação automática no extrato (caso do Itaú).
 - `valor` sempre positivo + `operacao` (`credito`/`debito`). O sinal ou sufixo C/D do próprio PDF prevalece sobre a coluna e sobre a IA.
-- IA só como fallback: `temperature=0`, `reasoning=False`, `num_ctx=16384` (o padrão do Ollama trunca o texto sem avisar).
+- IA só como fallback: `temperature=0`. O cliente é criado no primeiro uso (a API sobe sem `TOKEN_API_LLM`). Falhas do proxy viram `ErroIA` (`llm/erros.py`): 503 no upload, aviso por arquivo no SFTP.
+- O texto das páginas sem layout vai para o proxy de IA (fora da VM). PDFs com layout nunca saem do servidor.
 - Scripts em `cliente/`: compatíveis com **Windows PowerShell 5.1** e sem acentos nos `.ps1` (o 5.1 lê arquivo sem BOM como ANSI).
 - Mudou a resposta (`schemas/extrato.py`)? Atualize no repo do robô o `api-extratos.md` e a fixture `tests/fixtures/extratos_exemplo.json`.

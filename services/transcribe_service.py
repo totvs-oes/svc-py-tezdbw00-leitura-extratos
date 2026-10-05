@@ -5,7 +5,7 @@ from typing import Optional, Union
 from schemas.extrato import Conferencia, ExtratoConta, Lancamento, MovimentacaoNaoListada
 from services.layouts import ResultadoLayout, extrair_com_layout, identificar_layout
 from services.normalizacao import (ano_do_extrato, eh_linha_de_saldo, identificar_banco,
-                                   normalizar_data, parse_saldo, parse_valor)
+                                   normalizar_data, parse_saldo, parse_valor, zona_de_identificacao)
 from services.pdf_service import extrair_linhas, renderizar
 
 # Arquivos estáticos para teste.
@@ -36,14 +36,17 @@ def transcrever_pdf(nome_arquivo: str, origem: Union[str, bytes]) -> tuple[str, 
         return sem_leitura(nome_arquivo, "PDF sem texto (escaneado ou exportado como imagem). "
                                           "É necessário OCR para ler este arquivo.")
 
-    # Layout conhecido: parser determinístico. Desconhecido: IA como fallback
-    layout = identificar_layout(nome_arquivo, texto_completo)
+    # Banco e layout identificados só pelo nome do arquivo + cabeçalho/rodapés: o corpo cita outros bancos (contrapartes)
+    zona = zona_de_identificacao(paginas)
+
+    # Layout conhecido (e confirmado pelo cabeçalho da tabela): parser determinístico. Senão: IA como fallback
+    layout = identificar_layout(nome_arquivo, zona, linhas_por_pagina)
     if layout:
         resultado = extrair_com_layout(linhas_por_pagina, layout, texto_completo, ano)
         codigo_banco, metodo = layout.codigo_banco, f"layout {layout.nome}"
     else:
         resultado = _extrair_com_ia(paginas, ano)
-        codigo_banco, metodo = identificar_banco(texto_completo, nome_arquivo) or "desconhecido", "ia"
+        codigo_banco, metodo = identificar_banco(zona, nome_arquivo) or "desconhecido", "ia"
 
     extrato = ExtratoConta(
         arquivo=nome_arquivo,
@@ -59,15 +62,12 @@ def transcrever_pdf(nome_arquivo: str, origem: Union[str, bytes]) -> tuple[str, 
 def _extrair_com_ia(paginas: list[str], ano: Optional[str]) -> ResultadoLayout:
     from llm.llm import extrair_pagina  # só carrego a IA quando eu realmente preciso
 
-    # 1) IA: uma chamada por página (mantém o contexto pequeno e a precisão alta)
-    extracoes = [extrair_pagina(pagina) for pagina in paginas if pagina.strip()]
+    # 1) IA: uma chamada por página (mantém o contexto pequeno e a precisão alta).
+    #    O fim da página anterior vai junto: a página pode começar no meio de uma seção ("Total de saídas")
+    paginas = [pagina for pagina in paginas if pagina.strip()]
+    extracoes = [extrair_pagina(pagina, paginas[i - 1] if i else "") for i, pagina in enumerate(paginas)]
 
     # 2) Python: normalização determinística do que a IA devolveu
-    # Se o extrato marca os débitos com "-" (Santander, Itaú, Bradesco, ABC...), um valor
-    # sem sinal é crédito: não depende da interpretação da IA
-    usa_sinal_negativo = any(parse_valor(item.valor)[1] == "debito" and "-" in item.valor
-                             for extracao in extracoes for item in extracao.lancamentos)
-
     lancamentos: list[Lancamento] = []
     ultima_data: Optional[str] = None
     for extracao in extracoes:
@@ -79,9 +79,6 @@ def _extrair_com_ia(paginas: list[str], ano: Optional[str]) -> ResultadoLayout:
             # Bancos como o Bradesco só mostram a data na primeira linha do dia
             data = normalizar_data(item.data, ano) or ultima_data
             ultima_data = data
-
-            if not operacao_pelo_texto and usa_sinal_negativo:
-                operacao_pelo_texto = "credito"
 
             lancamentos.append(Lancamento(
                 data=data,
