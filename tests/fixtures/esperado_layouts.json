@@ -190,5 +190,17 @@
   "saldo_final": null,
   "total_creditos": 0.0,
   "total_debitos": 5.74
+ },
+ "TARIFAS ITAU 09-09.pdf": {
+  "banco": "banco_0341",
+  "conferencia_ok": true,
+  "conta": "4685/08311-7",
+  "impressao_digital": "abd4646a9331aecf9b1a5b3ad1d986bd30c3265785705294702b663400c96777",
+  "lancamentos": 374,
+  "metodo": "layout Tarifas Itaú",
+  "saldo_anterior": 342.76,
+  "saldo_final": 0.0,
+  "total_creditos": 0.0,
+  "total_debitos": 342.76
  }
 }

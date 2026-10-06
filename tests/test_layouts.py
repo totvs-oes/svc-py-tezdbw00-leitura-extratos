@@ -29,4 +29,4 @@ def test_conferencia_de_saldo_nunca_falha(nome):
 def test_referencia_cobre_todos_os_bancos():
     bancos = {r["metodo"] for r in ESPERADO.values()}
     assert bancos >= {"layout ABC", "layout Caixa", "layout Banco do Brasil", "layout Bradesco", "layout Itaú",
-                      "layout Safra", "layout Santander", "layout Daycoval", "layout Tarifas ABC"}
+                      "layout Safra", "layout Santander", "layout Daycoval", "layout Tarifas ABC", "layout Tarifas Itaú"}

@@ -10,7 +10,7 @@ from services.pdf_service import extrair_linhas, renderizar
 
 # Arquivos estáticos para teste.
 PASTA_EXEMPLOS = Path(__file__).resolve().parent.parent / "docs_example"
-SEM_LAYOUT = ("TARIFAS BB", "TARIFAS ITAU")
+SEM_LAYOUT = ("TARIFAS BB",)
 ARQUIVOS_TESTE = sorted(p for p in PASTA_EXEMPLOS.glob("*.pdf") if not p.name.upper().startswith(SEM_LAYOUT))
 
 

@@ -60,7 +60,9 @@ routers/                       sftp_router (listar e ler do SFTP), extratos_rout
 cliente/                       script que roda no Windows Server do cliente: entrada -> API -> lidos | erro
 ```
 
-Layouts: Tarifas ABC, ABC, Caixa, Banco do Brasil, Bradesco, Itaú, Safra, Santander, Daycoval.
+Layouts: Tarifas ABC, ABC, Caixa, Banco do Brasil, Bradesco, Tarifas Itaú, Itaú, Safra, Santander, Daycoval.
+
+- **Tarifas Itaú** (`extrair_tarifas_itau`): relatório "Movimentação de Títulos" (arquivo `TARIFAS ITAU`), detalhe da linha `TAR/CUSTAS COBRANCA` do extrato. Uma tarifa por boleto: código `01` (valor em "Outros Valores") e histórico `TM` (valor em "Crédito/Débito"). Conferência = soma das tarifas == "Total Deduções" do resumo (vai em `saldo_anterior`, com `saldo_final` 0). As palavras são reagrupadas pela altura real (a 1ª linha de cada página sai grudada no cabeçalho).
 
 ## Convenções
 

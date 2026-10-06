@@ -100,6 +100,15 @@ LAYOUTS: list[Layout] = [
         fim_da_tabela=r"^TOTAL\b",
     ),
     Layout(
+        # Relatório "Movimentação de Títulos" da carteira de cobrança: detalha a linha "TAR/CUSTAS COBRANCA"
+        # do extrato da conta corrente, tarifa por boleto. Antes do "Itaú": o nome "TARIFAS ITAU" casa com os dois.
+        nome="Tarifas Itaú", codigo_banco="0341",
+        identificacao=r"TARIFAS ITAU|MOVIMENTACAO DE TITULOS",
+        colunas=[],
+        conta=r"(\d{4}/\d{5}-\d)",
+        parser=lambda paginas, layout, texto, ano: extrair_tarifas_itau(paginas, layout, texto, ano),
+    ),
+    Layout(
         nome="Itaú", codigo_banco="0341",
         identificacao=r"ITAU",
         colunas=[Coluna("Data", DATA), Coluna("Lançamentos", HISTORICO), Coluna("Razão Social", IGNORAR),
@@ -451,5 +460,100 @@ def extrair_daycoval(paginas: list[list[Linha]], layout: Layout, texto: str, ano
 
     # A conferência (saldo anterior + lançamentos = saldo atual) pega lançamento que ficou de fora
     resultado.lancamentos = list(reversed(lancamentos))
+    return resultado
+
+
+# ---------------------------------------------------------------------------
+# Tarifas Itaú: relatório "Movimentação de Títulos" (detalhe da linha TAR/CUSTAS COBRANCA do extrato)
+# ---------------------------------------------------------------------------
+#
+#   Cart. Nosso nº/Dac Seu nº  Nome do pagador  Dep./Rec. Vencimento  Valor     Hist. Dia/mês Cód. Outros Valores Crédito/Débito
+#   109   00129495-8  0000714702 W. L. MAGAZINE  4320      03/08/26   1.005,92  L     09/09   04   62,16
+#                                                                                             01   0,89            1.067,19+
+#   109   00077345-7  0000540419 51115238 RAFAEL 9893      05/11/24   857,08    TM    09/09                         1,79 -
+#   ...
+#   Resumo das Deduções:  Tarifa - 0,00 +  Custas 342,76 -  Total Deduções 342,76 -
+#
+# Tarifas: código 01 (tarifa de cobrança, valor em "Outros Valores") e histórico TM (manutenção de título vencido,
+# valor em "Crédito/Débito"). Código 04 (juros) e 05 (desconto) não são tarifas. Cada tarifa vira um lançamento.
+# Conferência: a soma das tarifas tem que dar o "Total Deduções" do resumo, ao centavo.
+#
+# As palavras são reagrupadas pela altura real na página: a junção de células quebradas do pdf_service gruda a
+# primeira linha de cada página no cabeçalho, e a tarifa dela se perderia.
+
+RE_TARIFAS_ITAU_TOTAL = re.compile(r"TOTAL DEDU\w*\s+(-?[\d.]+,\d{2})")
+RE_TARIFAS_ITAU_EMISSAO = re.compile(r"(\d{2}/\d{2}/\d{2,4})")
+TOLERANCIA_COLUNA = 20  # pt: distância máxima entre a palavra e o X do cabeçalho ("09/09" fica 15 pt depois de "Dia/mês")
+
+
+def _linhas_visuais(pagina: list[Linha]) -> list[list[tuple]]:
+    palavras = sorted((p for linha in pagina for p in linha), key=lambda p: (round(p[3]), p[0]))
+    linhas: list[list[tuple]] = []
+    for p in palavras:
+        if linhas and abs(linhas[-1][0][3] - p[3]) <= 2:
+            linhas[-1].append(p)
+        else:
+            linhas.append([p])
+    return [sorted(l, key=lambda p: p[0]) for l in linhas]
+
+
+def _colunas_tarifas_itau(linhas: list[list[tuple]]) -> Optional[dict[str, float]]:
+    for linha in linhas:
+        x = {sem_acentos(p[4]).rstrip("."): p[0] for p in linha}
+        if {"COD", "OUTROS", "CREDITO/DEBITO", "HIST", "DIA/MES"} <= x.keys():
+            return {"hist": x["HIST"], "dia": x["DIA/MES"], "cod": x["COD"], "outros": x["OUTROS"],
+                    "cd": x["CREDITO/DEBITO"]}
+    return None
+
+
+def extrair_tarifas_itau(paginas: list[list[Linha]], layout: Layout, texto: str, ano: Optional[str]) -> ResultadoLayout:
+    resultado = ResultadoLayout(conta=_extrair_conta(layout, texto))
+    normalizado = sem_acentos(texto)
+    emissao = re.search(r"EMITIDO EM.*?" + RE_TARIFAS_ITAU_EMISSAO.pattern, normalizado, re.S)
+    ano_relatorio = ano
+    if emissao:
+        dia_emissao = emissao.group(1)
+        ano_relatorio = dia_emissao[-4:] if len(dia_emissao) == 10 else "20" + dia_emissao[-2:]
+
+    colunas: Optional[dict[str, float]] = None
+    titulo = ""            # "<nosso nº> <pagador>" do boleto da linha atual (a linha do 01 pode vir sozinha)
+    dia_mes: Optional[str] = None
+    for pagina in paginas:
+        linhas = _linhas_visuais(pagina)
+        colunas = _colunas_tarifas_itau(linhas) or colunas
+        if colunas is None:
+            continue
+
+        def na_coluna(p, coluna: str) -> bool:
+            return abs(p[0] - colunas[coluna]) <= TOLERANCIA_COLUNA
+
+        for linha in linhas:
+            if linha[0][4] == "109" and len(linha) > 2:  # linha de boleto (carteira 109)
+                pagador = [p[4] for p in linha if colunas["hist"] - 380 < p[0] < colunas["hist"] - 180
+                           and not RE_DINHEIRO.fullmatch(p[4]) and not RE_DATA.fullmatch(p[4]) and not p[4].isdigit()]
+                titulo = f"{linha[1][4]} {' '.join(pagador)}".strip()
+            if dia := next((p[4] for p in linha if na_coluna(p, "dia") and RE_DATA.fullmatch(p[4])), None):
+                dia_mes = dia
+            historico = next((p[4] for p in linha if na_coluna(p, "hist") and p[4].isalpha()), "")
+            data = normalizar_data(dia_mes, ano_relatorio) if dia_mes else None
+
+            # Código 01 = tarifa de cobrança: valor na coluna "Outros Valores"
+            if any(p[4] == "01" and na_coluna(p, "cod") for p in linha):
+                valor = next((p for p in linha if RE_DINHEIRO.fullmatch(p[4])
+                              and colunas["outros"] - 30 <= p[0] < colunas["cd"] - 20), None)
+                if valor and (v := parse_valor(valor[4])[0]):
+                    resultado.lancamentos.append(Lancamento(
+                        data=data, historico=f"TAR COBRANCA {titulo}", operacao="debito", valor=v))
+            # TM = tarifa de manutenção de título vencido: valor (débito) na coluna "Crédito/Débito"
+            elif historico == "TM":
+                valor = next((p for p in linha if RE_DINHEIRO.fullmatch(p[4]) and p[0] >= colunas["cd"] - 20), None)
+                if valor and (v := parse_valor(valor[4])[0]):
+                    resultado.lancamentos.append(Lancamento(
+                        data=data, historico=f"TAR MANUT TIT VENCIDO {titulo}", operacao="debito", valor=v))
+
+    # Conferência: total das tarifas lidas = "Total Deduções" do resumo (saldo_anterior - débitos = saldo_final 0)
+    if total := RE_TARIFAS_ITAU_TOTAL.search(normalizado):
+        resultado.saldo_anterior = parse_valor(total.group(1))[0]
+        resultado.saldo_final = 0.0
     return resultado
 
