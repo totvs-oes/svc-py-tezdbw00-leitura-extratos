@@ -3,7 +3,7 @@ from email.header import decode_header, make_header
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 
-from llm.erros import ErroIA
+from llm.erros import ErroIA, erro_ia_para_http
 from schemas.extrato import ExtratoConta
 from security.security import verify_token
 from services.transcribe_service import transcrever_uploads
@@ -41,8 +41,9 @@ def _ler_pdf(arquivo: UploadFile) -> bytes:
 @router.post("/extratos", response_model=dict[str, list[ExtratoConta]], status_code=status.HTTP_200_OK,
              dependencies=[Depends(verify_token)])
 def enviar_extratos(arquivos: list[UploadFile] = File(..., description="Um ou mais extratos em PDF.")):
+    """Lê um ou mais extratos enviados por upload (multipart/form-data)."""
     pdfs = [(_nome_do_arquivo(arquivo), _ler_pdf(arquivo)) for arquivo in arquivos]
     try:
         return transcrever_uploads(pdfs)
     except ErroIA as erro:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, f"IA indisponível: {erro}")
+        raise erro_ia_para_http(erro)

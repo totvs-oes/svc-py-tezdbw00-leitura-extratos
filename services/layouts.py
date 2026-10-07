@@ -6,12 +6,17 @@ de uma linha vai para a coluna em que cai. Não há IA envolvida: o resultado é
 e instantâneo. PDFs que não casam com nenhum layout caem no fallback com IA.
 """
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Optional
 
 from schemas.extrato import Lancamento, MovimentacaoNaoListada
-from services.normalizacao import (eh_linha_de_saldo, normalizar_data, parse_saldo,
-                                   parse_valor, sem_acentos)
+from services.normalizacao import (
+    eh_linha_de_saldo,
+    normalizar_data,
+    parse_saldo,
+    parse_valor,
+    sem_acentos,
+)
 from services.pdf_service import LARGURA_CARACTERE, Linha, renderizar
 
 RE_DINHEIRO = re.compile(r"-?\d{1,3}(?:\.\d{3})*,\d{2}[-+]?|-?\d+,\d{2}[-+]?")
@@ -38,18 +43,18 @@ class Layout:
     identificacao: str                  # regex no nome do arquivo + texto (sem acentos, maiúsculo)
     colunas: list[Coluna]
     conta: str                          # regex com um grupo para o número da conta
-    fim_da_tabela: Optional[str] = None  # regex da linha que encerra a tabela
-    inicio_dos_lancamentos: Optional[str] = None  # só considera lançamentos após essa linha
-    operacao_padrao: Optional[str] = None         # ex.: relatório de tarifas é sempre débito
+    fim_da_tabela: str | None = None  # regex da linha que encerra a tabela
+    inicio_dos_lancamentos: str | None = None  # só considera lançamentos após essa linha
+    operacao_padrao: str | None = None         # ex.: relatório de tarifas é sempre débito
     anexar_linhas_sem_valor: bool = False         # BB: complemento do histórico vem na linha de baixo
     conferir_saldo: bool = True
     # Linhas que informam o saldo da conta corrente ao longo do extrato (pontos de controle).
     # Se o saldo corrido divergir delas, há movimentação que o banco não listou.
-    saldo_da_conta: Optional[str] = None
+    saldo_da_conta: str | None = None
     # Históricos que indicam aplicação automática (justificam a movimentação não listada)
-    aplicacao_automatica: Optional[str] = None
+    aplicacao_automatica: str | None = None
     # Extrato sem tabela de colunas (ex.: Daycoval): parser próprio no lugar do de colunas
-    parser: Optional[Callable[[list[list[Linha]], "Layout", str, Optional[str]], "ResultadoLayout"]] = None
+    parser: Callable[[list[list[Linha]], "Layout", str, str | None], "ResultadoLayout"] | None = None
 
 
 LAYOUTS: list[Layout] = [
@@ -148,7 +153,7 @@ LAYOUTS: list[Layout] = [
 ]
 
 
-def identificar_layout(nome_arquivo: str, zona: str, paginas: Optional[list[list[Linha]]] = None) -> Optional[Layout]:
+def identificar_layout(nome_arquivo: str, zona: str, paginas: list[list[Linha]] | None = None) -> Layout | None:
     """Layout do extrato, ou None (vai para a IA).
 
     Candidatos: pelo nome do arquivo, depois pela zona de identificação (cabeçalho/rodapés, ver
@@ -184,7 +189,7 @@ class _Faixa:
     inicio: float = 0   # a partir de qual X uma palavra de texto pertence a esta coluna
 
 
-def _localizar_cabecalho(linha: Linha, layout: Layout) -> Optional[list[_Faixa]]:
+def _localizar_cabecalho(linha: Linha, layout: Layout) -> list[_Faixa] | None:
     """Se a linha for o cabeçalho da tabela, devolve a faixa X de cada coluna."""
     palavras = sorted(linha, key=lambda p: p[0])
     normalizadas = [_normalizar(p[4]) for p in palavras]
@@ -267,25 +272,25 @@ def _distribuir(linha: Linha, faixas: list[_Faixa]) -> dict[str, list[str]]:
 
 @dataclass
 class ResultadoLayout:
-    conta: Optional[str]
+    conta: str | None
     lancamentos: list[Lancamento] = field(default_factory=list)
-    saldo_anterior: Optional[float] = None
-    saldo_final: Optional[float] = None
+    saldo_anterior: float | None = None
+    saldo_final: float | None = None
     nao_listadas: list[MovimentacaoNaoListada] = field(default_factory=list)
 
 
-def extrair_com_layout(paginas: list[list[Linha]], layout: Layout, texto: str, ano: Optional[str]) -> ResultadoLayout:
+def extrair_com_layout(paginas: list[list[Linha]], layout: Layout, texto: str, ano: str | None) -> ResultadoLayout:
     if layout.parser:
         return layout.parser(paginas, layout, texto, ano)
     resultado = ResultadoLayout(conta=_extrair_conta(layout, texto))
 
-    faixas: Optional[list[_Faixa]] = None
+    faixas: list[_Faixa] | None = None
     na_tabela = False
     lancamentos_liberados = layout.inicio_dos_lancamentos is None
-    ultima_data: Optional[str] = None
-    ultimo_saldo: Optional[float] = None
+    ultima_data: str | None = None
+    ultimo_saldo: float | None = None
     # Controle de movimentações não listadas (pontos de controle de saldo)
-    saldo_corrido: Optional[float] = None
+    saldo_corrido: float | None = None
     datas_vistas: list[str] = []
     datas_com_aplicacao: set[str] = set()
 
@@ -363,7 +368,7 @@ def extrair_com_layout(paginas: list[list[Linha]], layout: Layout, texto: str, a
     return resultado
 
 
-def _movimentacao_nao_listada(diferenca: float, data: Optional[str], datas_vistas: list[str],
+def _movimentacao_nao_listada(diferenca: float, data: str | None, datas_vistas: list[str],
                               datas_com_aplicacao: set[str]) -> MovimentacaoNaoListada:
     """Classifica a diferença entre o saldo corrido e o saldo informado pelo banco.
 
@@ -384,7 +389,7 @@ def _movimentacao_nao_listada(diferenca: float, data: Optional[str], datas_vista
     return MovimentacaoNaoListada(data=data, valor=round(diferenca, 2), descricao=descricao, explicada=explicada)
 
 
-def _valor_e_operacao(celulas: dict[str, list[str]], layout: Layout) -> tuple[Optional[float], Optional[str]]:
+def _valor_e_operacao(celulas: dict[str, list[str]], layout: Layout) -> tuple[float | None, str | None]:
     for papel in (VALOR, CREDITO, DEBITO):
         if papel not in celulas:
             continue
@@ -400,7 +405,7 @@ def _valor_e_operacao(celulas: dict[str, list[str]], layout: Layout) -> tuple[Op
     return None, None
 
 
-def _extrair_conta(layout: Layout, texto: str) -> Optional[str]:
+def _extrair_conta(layout: Layout, texto: str) -> str | None:
     if match := re.search(layout.conta, texto):
         conta = next(g for g in match.groups() if g)
         # Caixa: "XXXX | XXXX | XXXXXXXXXX-X" -> a conta é o último item
@@ -425,7 +430,7 @@ RE_DAYCOVAL_LANCAMENTO = re.compile(r"^(\d{2}/\d{2})\s+(.+?)\s+(-?R\$\s*[\d.]+,\
 RE_DAYCOVAL_PERIODO = re.compile(r"(\d{2}/\d{2}/\d{4})\s+A\s+(\d{2}/\d{2}/\d{4})")
 
 
-def _ano_no_periodo(data_curta: str, periodo: Optional[tuple[str, str]], ano: Optional[str]) -> Optional[str]:
+def _ano_no_periodo(data_curta: str, periodo: tuple[str, str] | None, ano: str | None) -> str | None:
     """Ano do lançamento "dd/mm". Período que vira o ano (29/12 a 04/01): mês maior que o final = ano inicial."""
     if not periodo:
         return ano
@@ -433,7 +438,7 @@ def _ano_no_periodo(data_curta: str, periodo: Optional[tuple[str, str]], ano: Op
     return inicio[6:] if int(data_curta[3:5]) > int(fim[3:5]) else fim[6:]
 
 
-def extrair_daycoval(paginas: list[list[Linha]], layout: Layout, texto: str, ano: Optional[str]) -> ResultadoLayout:
+def extrair_daycoval(paginas: list[list[Linha]], layout: Layout, texto: str, ano: str | None) -> ResultadoLayout:
     resultado = ResultadoLayout(conta=_extrair_conta(layout, texto))
     periodo = RE_DAYCOVAL_PERIODO.search(sem_acentos(texto))
     periodo = periodo.groups() if periodo else None
@@ -497,7 +502,7 @@ def _linhas_visuais(pagina: list[Linha]) -> list[list[tuple]]:
     return [sorted(l, key=lambda p: p[0]) for l in linhas]
 
 
-def _colunas_tarifas_itau(linhas: list[list[tuple]]) -> Optional[dict[str, float]]:
+def _colunas_tarifas_itau(linhas: list[list[tuple]]) -> dict[str, float] | None:
     for linha in linhas:
         x = {sem_acentos(p[4]).rstrip("."): p[0] for p in linha}
         if {"COD", "OUTROS", "CREDITO/DEBITO", "HIST", "DIA/MES"} <= x.keys():
@@ -506,18 +511,18 @@ def _colunas_tarifas_itau(linhas: list[list[tuple]]) -> Optional[dict[str, float
     return None
 
 
-def extrair_tarifas_itau(paginas: list[list[Linha]], layout: Layout, texto: str, ano: Optional[str]) -> ResultadoLayout:
+def extrair_tarifas_itau(paginas: list[list[Linha]], layout: Layout, texto: str, ano: str | None) -> ResultadoLayout:
     resultado = ResultadoLayout(conta=_extrair_conta(layout, texto))
     normalizado = sem_acentos(texto)
-    emissao = re.search(r"EMITIDO EM.*?" + RE_TARIFAS_ITAU_EMISSAO.pattern, normalizado, re.S)
+    emissao = re.search(r"EMITIDO EM.*?" + RE_TARIFAS_ITAU_EMISSAO.pattern, normalizado, re.DOTALL)
     ano_relatorio = ano
     if emissao:
         dia_emissao = emissao.group(1)
         ano_relatorio = dia_emissao[-4:] if len(dia_emissao) == 10 else "20" + dia_emissao[-2:]
 
-    colunas: Optional[dict[str, float]] = None
+    colunas: dict[str, float] | None = None
     titulo = ""            # "<nosso nº> <pagador>" do boleto da linha atual (a linha do 01 pode vir sozinha)
-    dia_mes: Optional[str] = None
+    dia_mes: str | None = None
     for pagina in paginas:
         linhas = _linhas_visuais(pagina)
         colunas = _colunas_tarifas_itau(linhas) or colunas

@@ -1,7 +1,8 @@
 from fastapi import APIRouter
-from routers.transcribe_router import router as transcribe_router
+
 from routers.extratos_router import router as extratos_router
 from routers.sftp_router import router as sftp_router
+from routers.transcribe_router import router as transcribe_router
 
 router = APIRouter()
 

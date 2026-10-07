@@ -1,6 +1,5 @@
 import re
 import unicodedata
-from typing import Optional
 
 # Código COMPE -> palavras que identificam o banco no texto do PDF ou no nome do arquivo
 BANCOS = {
@@ -44,7 +43,7 @@ def zona_de_identificacao(paginas: list[str], linhas_topo: int = 8, linhas_rodap
     return "\n".join(trechos)
 
 
-def identificar_banco(zona: str, nome_arquivo: str) -> Optional[str]:
+def identificar_banco(zona: str, nome_arquivo: str) -> str | None:
     """Identifica o banco de forma determinística: nome do arquivo primeiro, depois a zona de identificação.
 
     Passe a zona_de_identificacao(), não o texto inteiro: o corpo cita os bancos das contrapartes.
@@ -56,7 +55,7 @@ def identificar_banco(zona: str, nome_arquivo: str) -> Optional[str]:
     return None
 
 
-def parse_valor(texto: Optional[str]) -> tuple[Optional[float], Optional[str]]:
+def parse_valor(texto: str | None) -> tuple[float | None, str | None]:
     """Converte "1.234,56 D" / "-12,11" / "68.875,15 C" em (valor absoluto, operação indicada pelo texto).
 
     A operação só é retornada quando o próprio texto deixa explícito (sinal ou sufixo C/D).
@@ -69,26 +68,26 @@ def parse_valor(texto: Optional[str]) -> tuple[Optional[float], Optional[str]]:
         return None, None
     valor = float(match.group().replace(".", "").replace(",", "."))
 
-    if t.startswith("-") or t.endswith("-") or t.endswith("D"):
+    if t.startswith("-") or t.endswith(("-", "D")):
         return valor, "debito"
-    if t.startswith("+") or t.endswith("+") or t.endswith("C"):
+    if t.startswith("+") or t.endswith(("+", "C")):
         return valor, "credito"
     return valor, None
 
 
-def parse_saldo(texto: Optional[str]) -> Optional[float]:
+def parse_saldo(texto: str | None) -> float | None:
     valor, operacao = parse_valor(texto)
     if valor is None:
         return None
     return -valor if operacao == "debito" else valor
 
 
-def ano_do_extrato(texto: str) -> Optional[str]:
+def ano_do_extrato(texto: str) -> str | None:
     match = RE_DATA_COMPLETA.search(texto)
     return match.group(3) if match else None
 
 
-def normalizar_data(data: Optional[str], ano: Optional[str]) -> Optional[str]:
+def normalizar_data(data: str | None, ano: str | None) -> str | None:
     """Padroniza a data para dd/mm/aaaa (alguns bancos, como o Safra, mostram só dd/mm)."""
     if not data:
         return None
