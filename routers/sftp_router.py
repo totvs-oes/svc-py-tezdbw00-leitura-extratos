@@ -7,7 +7,12 @@ from llm.erros import ErroIA
 from schemas.extrato import ExtratoConta
 from security.security import verify_token
 from services import sftp_service
-from services.sftp_service import CaminhoInvalido, ErroSftp, NaoEncontrado, SftpNaoConfigurado
+from services.sftp_service import (
+    CaminhoInvalido,
+    ErroSftp,
+    NaoEncontrado,
+    SftpNaoConfigurado,
+)
 from services.transcribe_service import agrupar_por_banco, sem_leitura, transcrever_pdf
 
 router = APIRouter(dependencies=[Depends(verify_token)])
@@ -35,6 +40,7 @@ def _erro_http(erro: Exception) -> HTTPException:
 
 @router.get("/sftp/listar", response_model=Listagem)
 def listar(caminho: str = Query("", description="Pasta relativa à pasta base (vazio = a própria base).")):
+    """Lista subpastas e PDFs de uma pasta do SFTP do cliente."""
     try:
         config = sftp_service.carregar_config()
         remoto = sftp_service.caminho_remoto(config.pasta_base, caminho)

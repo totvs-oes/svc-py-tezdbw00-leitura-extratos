@@ -12,7 +12,6 @@ import hashlib
 import json
 import sys
 from pathlib import Path
-from typing import Optional
 
 from services.layouts import identificar_layout
 from services.normalizacao import zona_de_identificacao
@@ -52,7 +51,7 @@ def pdfs_com_layout(pasta: Path = PASTA_EXEMPLOS) -> list[Path]:
     return [a for a in sorted(pasta.glob("*.pdf")) if tem_layout(a)]
 
 
-def carregar_esperado() -> Optional[dict]:
+def carregar_esperado() -> dict | None:
     return json.loads(ESPERADO.read_text(encoding="utf-8")) if ESPERADO.exists() else None
 
 
@@ -61,5 +60,5 @@ if __name__ == "__main__":
     ESPERADO.parent.mkdir(parents=True, exist_ok=True)
     ESPERADO.write_text(json.dumps(esperado, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     for nome, r in esperado.items():
-        print(f"{r['metodo']:<22} ok={str(r['conferencia_ok']):<5} {r['lancamentos']:>4} lanç.  {nome}")
+        print(f"{r['metodo']:<22} ok={r['conferencia_ok']!s:<5} {r['lancamentos']:>4} lanç.  {nome}")
     print(f"{len(esperado)} arquivo(s) -> {ESPERADO}", file=sys.stderr)

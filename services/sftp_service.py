@@ -16,12 +16,11 @@ from __future__ import annotations
 import io
 import os
 import posixpath
-import socket
 import stat
 import sys
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Iterator, Optional
 
 import paramiko
 
@@ -50,8 +49,8 @@ class ConfigSftp:
     host: str
     porta: int
     usuario: str
-    senha: Optional[str]
-    chave: Optional[str]
+    senha: str | None
+    chave: str | None
     pasta_base: str
     known_hosts: str
 
@@ -87,13 +86,20 @@ def caminho_remoto(pasta_base: str, relativo: str) -> str:
     return posixpath.join(pasta_base, *partes) if partes else pasta_base
 
 
+def _nome_known_hosts(host: str, porta: int) -> str:
+    """Formato da chave do host no arquivo known_hosts (igual ao de linha_known_hosts)."""
+    return host if porta == 22 else f"[{host}]:{porta}"
+
+
 @contextmanager
-def conectar(config: Optional[ConfigSftp] = None) -> Iterator[paramiko.SFTPClient]:
+def conectar(config: ConfigSftp | None = None) -> Iterator[paramiko.SFTPClient]:
     config = config or carregar_config()
     ssh = paramiko.SSHClient()
     ssh.load_host_keys(config.known_hosts)
     # Servidor com chave desconhecida ou diferente da registrada: recusa (proteção contra servidor falso)
     ssh.set_missing_host_key_policy(paramiko.RejectPolicy())
+    if not ssh.get_host_keys().lookup(_nome_known_hosts(config.host, config.porta)):
+        raise ErroSftp(f"Servidor {config.host} não está no known_hosts ({config.known_hosts}).")
     try:
         ssh.connect(config.host, port=config.porta, username=config.usuario,
                     password=config.senha, key_filename=config.chave,
@@ -109,10 +115,8 @@ def conectar(config: Optional[ConfigSftp] = None) -> Iterator[paramiko.SFTPClien
         raise ErroSftp(f"Usuário ou senha/chave do SFTP recusados por {config.host}.") from erro
     except paramiko.SSHException as erro:
         ssh.close()
-        if "not found in known_hosts" in str(erro):
-            raise ErroSftp(f"Servidor {config.host} não está no known_hosts ({config.known_hosts}).") from erro
         raise ErroSftp(f"Falha no SSH com {config.host}: {erro}") from erro
-    except (OSError, socket.timeout) as erro:
+    except (TimeoutError, OSError) as erro:
         ssh.close()
         raise ErroSftp(f"Sem conexão com o SFTP {config.host}:{config.porta} ({erro}).") from erro
     try:

@@ -11,7 +11,7 @@ from llm.erros import ErroIA
 from schemas.extrato import ExtracaoPagina
 
 base_url = os.getenv("LLM_BASE_API_URL")
-model = os.getenv("LLM_MODEL")
+model = os.getenv("LLM_MODEL", "gpt-4o")
 
 
 system = """Você é um extrator de dados de extratos bancários brasileiros.
