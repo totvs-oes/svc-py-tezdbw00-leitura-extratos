@@ -2,8 +2,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI
 import uvicorn
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from routers.endpoints import router
@@ -15,8 +15,9 @@ app.include_router(router)
 
 app.add_middleware(
     CORSMiddleware,
+    # allow_credentials não é usado: a autenticação é por Bearer token, não por cookie,
+    # e o navegador recusa allow_origins="*" combinado com allow_credentials=True.
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )

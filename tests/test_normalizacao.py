@@ -1,7 +1,12 @@
 import pytest
 
-from services.normalizacao import (eh_linha_de_saldo, identificar_banco, normalizar_data, parse_saldo,
-                                   parse_valor)
+from services.normalizacao import (
+    eh_linha_de_saldo,
+    identificar_banco,
+    normalizar_data,
+    parse_saldo,
+    parse_valor,
+)
 
 
 @pytest.mark.parametrize("texto, esperado", [

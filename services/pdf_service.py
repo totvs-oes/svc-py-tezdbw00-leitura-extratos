@@ -1,5 +1,4 @@
 import re
-from typing import Union
 
 import pymupdf
 
@@ -106,14 +105,14 @@ def renderizar(palavras: Linha) -> str:
     return texto.rstrip()
 
 
-def _abrir(origem: Union[str, bytes]):
+def _abrir(origem: str | bytes):
     """Abre o PDF a partir de um caminho ou do conteúdo em memória (upload)."""
     if isinstance(origem, bytes):
         return pymupdf.open(stream=origem, filetype="pdf")
     return pymupdf.open(origem)
 
 
-def extrair_linhas(origem: Union[str, bytes]) -> list[list[Linha]]:
+def extrair_linhas(origem: str | bytes) -> list[list[Linha]]:
     """Para cada página, as linhas visuais (cada uma com suas palavras e coordenadas).
 
     O get_text() padrão devolve cada célula da tabela em uma linha separada, o que
@@ -123,6 +122,6 @@ def extrair_linhas(origem: Union[str, bytes]) -> list[list[Linha]]:
         return [_juntar_celulas_quebradas(_agrupar_em_linhas(_palavras(page))) for page in doc]
 
 
-def extrair_paginas(origem: Union[str, bytes]) -> list[str]:
+def extrair_paginas(origem: str | bytes) -> list[str]:
     """Extrai o texto de cada página do PDF preservando o layout das linhas."""
     return ["\n".join(renderizar(linha) for linha in pagina) for pagina in extrair_linhas(origem)]

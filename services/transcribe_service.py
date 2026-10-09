@@ -1,17 +1,34 @@
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Optional, Union
 
-from schemas.extrato import Conferencia, ExtratoConta, Lancamento, MovimentacaoNaoListada
+from schemas.extrato import (
+    Conferencia,
+    ExtratoConta,
+    Lancamento,
+    MovimentacaoNaoListada,
+)
 from services.layouts import ResultadoLayout, extrair_com_layout, identificar_layout
-from services.normalizacao import (ano_do_extrato, eh_linha_de_saldo, identificar_banco,
-                                   normalizar_data, parse_saldo, parse_valor, zona_de_identificacao)
+from services.normalizacao import (
+    ano_do_extrato,
+    eh_linha_de_saldo,
+    identificar_banco,
+    normalizar_data,
+    parse_saldo,
+    parse_valor,
+    zona_de_identificacao,
+)
 from services.pdf_service import extrair_linhas, renderizar
 
 # Arquivos estáticos para teste.
 PASTA_EXEMPLOS = Path(__file__).resolve().parent.parent / "docs_example"
 SEM_LAYOUT: tuple[str, ...] = ()   # todos os PDFs de docs_example têm leitor fixo
 ARQUIVOS_TESTE = sorted(p for p in PASTA_EXEMPLOS.glob("*.pdf") if not p.name.upper().startswith(SEM_LAYOUT))
+
+# Chamadas de IA em paralelo (uma por página): extrato de muitas páginas não vira uma
+# sequência de minutos numa única requisição. Poucos workers para não estourar o rate
+# limit do proxy de IA.
+PAGINAS_SIMULTANEAS_NA_IA = 5
 
 
 def sem_leitura(nome_arquivo: str, aviso: str) -> tuple[str, ExtratoConta]:
@@ -24,7 +41,7 @@ def transcrever_arquivo(file_path: Path) -> tuple[str, ExtratoConta]:
     return transcrever_pdf(file_path.name, str(file_path))
 
 
-def transcrever_pdf(nome_arquivo: str, origem: Union[str, bytes]) -> tuple[str, ExtratoConta]:
+def transcrever_pdf(nome_arquivo: str, origem: str | bytes) -> tuple[str, ExtratoConta]:
     """Lê um extrato, a partir do caminho do arquivo ou do conteúdo em memória (upload)."""
     linhas_por_pagina = extrair_linhas(origem)
     paginas = ["\n".join(renderizar(linha) for linha in pagina) for pagina in linhas_por_pagina]
@@ -59,17 +76,19 @@ def transcrever_pdf(nome_arquivo: str, origem: Union[str, bytes]) -> tuple[str, 
     return f"banco_{codigo_banco}", extrato
 
 
-def _extrair_com_ia(paginas: list[str], ano: Optional[str]) -> ResultadoLayout:
+def _extrair_com_ia(paginas: list[str], ano: str | None) -> ResultadoLayout:
     from llm.llm import extrair_pagina  # só carrego a IA quando eu realmente preciso
 
-    # 1) IA: uma chamada por página (mantém o contexto pequeno e a precisão alta).
+    # 1) IA: uma chamada por página (mantém o contexto pequeno e a precisão alta), em paralelo.
     #    O fim da página anterior vai junto: a página pode começar no meio de uma seção ("Total de saídas")
     paginas = [pagina for pagina in paginas if pagina.strip()]
-    extracoes = [extrair_pagina(pagina, paginas[i - 1] if i else "") for i, pagina in enumerate(paginas)]
+    argumentos = [(pagina, paginas[i - 1] if i else "") for i, pagina in enumerate(paginas)]
+    with ThreadPoolExecutor(max_workers=PAGINAS_SIMULTANEAS_NA_IA) as executor:
+        extracoes = list(executor.map(lambda args: extrair_pagina(*args), argumentos))
 
     # 2) Python: normalização determinística do que a IA devolveu
     lancamentos: list[Lancamento] = []
-    ultima_data: Optional[str] = None
+    ultima_data: str | None = None
     for extracao in extracoes:
         for item in extracao.lancamentos:
             valor, operacao_pelo_texto = parse_valor(item.valor)
@@ -99,8 +118,8 @@ def _extrair_com_ia(paginas: list[str], ano: Optional[str]) -> ResultadoLayout:
     )
 
 
-def conferir(lancamentos: list[Lancamento], saldo_anterior: Optional[float], saldo_final: Optional[float],
-             nao_listadas: Optional[list[MovimentacaoNaoListada]] = None) -> Conferencia:
+def conferir(lancamentos: list[Lancamento], saldo_anterior: float | None, saldo_final: float | None,
+             nao_listadas: list[MovimentacaoNaoListada] | None = None) -> Conferencia:
     """Confere se saldo anterior + créditos - débitos (+ movimentações não listadas) bate com o saldo final.
 
     É o principal indicador de que nenhum lançamento foi pulado, duplicado ou invertido.
@@ -133,7 +152,7 @@ def agrupar_por_banco(extratos: list[tuple[str, ExtratoConta]]) -> dict[str, lis
     return dict(resultado)
 
 
-def transcrever(filtro: Optional[str] = None) -> dict[str, list[ExtratoConta]]:
+def transcrever(filtro: str | None = None) -> dict[str, list[ExtratoConta]]:
     arquivos = [a for a in ARQUIVOS_TESTE if not filtro or filtro.upper() in a.name.upper()]
     return agrupar_por_banco([transcrever_arquivo(arquivo) for arquivo in arquivos])
 
