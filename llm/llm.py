@@ -1,4 +1,3 @@
-import os
 from functools import lru_cache
 
 import openai
@@ -9,9 +8,10 @@ from pydantic import ValidationError
 
 from llm.erros import ErroIA
 from schemas.extrato import ExtracaoPagina
+from services import credenciais
 
-base_url = os.getenv("LLM_BASE_API_URL")
-model = os.getenv("LLM_MODEL", "gpt-4o")
+base_url = credenciais.obter("LLM_BASE_API_URL") or None
+model = credenciais.obter("LLM_MODEL", "gpt-4o")
 
 
 system = """Você é um extrator de dados de extratos bancários brasileiros.
@@ -49,7 +49,6 @@ LINHAS_DE_CONTEXTO = 25
 @lru_cache(maxsize=1)
 def _extracao_chain():
     """Cria o cliente só no primeiro uso: a API sobe mesmo sem a chave, já que a IA só é usada sem layout."""
-    from services import credenciais
     api_key = credenciais.obter("TOKEN_API_LLM")
     if not api_key:
         raise ErroIA("TOKEN_API_LLM não configurado (.env ou Gerenciador de Credenciais).")

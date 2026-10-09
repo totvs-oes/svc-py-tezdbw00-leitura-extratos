@@ -18,7 +18,7 @@ venv\Scripts\python -m tests.regressao   # regrava a referência dos layouts (s�
 Testes: `tests/test_layouts.py` compara a leitura de cada PDF de `docs_example/` com `tests/fixtures/esperado_layouts.json` (totais, saldos e SHA-256 dos lançamentos, sem o texto dos extratos); sem a pasta, esses testes são pulados. A IA nunca é chamada nos testes.
 
 `.env` (modelo em `.env.example`): `TOKEN` (Bearer das rotas), `LLM_BASE_API_URL` (proxy de IA da TOTVS), `TOKEN_API_LLM`, `LLM_MODEL` (padrão `gpt-4o`), `SFTP_*` (servidor do cliente).
-Segredos (`TOKEN`, `TOKEN_API_LLM`, `SFTP_USUARIO`, `SFTP_SENHA`) via `services/credenciais.py`: variável de ambiente/.env preenchida primeiro, senão o Gerenciador de Credenciais do Windows (`AEROFLEX RPA/<NOME>`).
+Segredos (`TOKEN`, `TOKEN_API_LLM`, `SFTP_USUARIO`, `SFTP_SENHA`) e `LLM_BASE_API_URL`/`LLM_MODEL` via `services/credenciais.py`: variável de ambiente/.env preenchida primeiro, senão o Gerenciador de Credenciais do Windows (`AEROFLEX RPA/<NOME>`).
 `requirements.txt` está em **UTF-16** (gerado por `pip freeze` no PowerShell): ao editar, preserve a codificação.
 
 ### Docker (produção)
