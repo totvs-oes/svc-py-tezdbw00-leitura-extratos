@@ -689,7 +689,7 @@ RE_TARIFAS_BB_NOSSO_NUMERO = re.compile(r"\d{15,20}-?")
 RE_TARIFAS_BB_DATA_MOVIMENTO = re.compile(r"DATA DO MOVIMENTO\s+(\d{2}/\d{2}/\d{4})")
 
 
-def extrair_tarifas_bb(paginas: list[list[Linha]], layout: Layout, texto: str, ano: Optional[str]) -> ResultadoLayout:
+def extrair_tarifas_bb(paginas: list[list[Linha]], layout: Layout, texto: str, ano: str | None) -> ResultadoLayout:
     resultado = ResultadoLayout(conta=_extrair_conta(layout, texto))
     movimento = RE_TARIFAS_BB_DATA_MOVIMENTO.search(sem_acentos(texto))
     data = movimento.group(1) if movimento else None
@@ -717,7 +717,7 @@ def extrair_tarifas_bb(paginas: list[list[Linha]], layout: Layout, texto: str, a
     return resultado
 
 
-def _total_deducoes_itau(paginas: list[list[Linha]]) -> Optional[float]:
+def _total_deducoes_itau(paginas: list[list[Linha]]) -> float | None:
     """Valor sob o rótulo "Total Deduções": o mais à direita da linha seguinte ao cabeçalho do resumo.
 
     Pela posição, não pela ordem do texto: em 10/09/2026 o resumo trouxe "Custas 0,00" na mesma linha e a ordem do
