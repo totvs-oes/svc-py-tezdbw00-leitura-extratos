@@ -56,7 +56,11 @@ class ConfigSftp:
 
 
 def carregar_config() -> ConfigSftp:
-    env = os.environ.get
+    from services import credenciais
+
+    def env(nome: str, padrao: str | None = None) -> str | None:
+        return credenciais.obter(nome) or padrao   # .env/variável de ambiente ou Gerenciador de Credenciais
+
     faltando = [nome for nome in ("SFTP_HOST", "SFTP_USUARIO", "SFTP_PASTA_BASE", "SFTP_KNOWN_HOSTS") if not env(nome)]
     if not env("SFTP_SENHA") and not env("SFTP_CHAVE"):
         faltando.append("SFTP_SENHA ou SFTP_CHAVE")

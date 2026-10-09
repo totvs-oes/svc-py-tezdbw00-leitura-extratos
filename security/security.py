@@ -1,13 +1,14 @@
-import os
 from hmac import compare_digest
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from services import credenciais
+
 security = HTTPBearer(auto_error=False)
 
 def verify_token(credentials: HTTPAuthorizationCredentials | None = Depends(security)):
-    expected_token = os.getenv("TOKEN")
+    expected_token = credenciais.obter("TOKEN")
 
     if not expected_token:
         raise HTTPException(

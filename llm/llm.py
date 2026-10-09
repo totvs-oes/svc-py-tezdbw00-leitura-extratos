@@ -49,9 +49,10 @@ LINHAS_DE_CONTEXTO = 25
 @lru_cache(maxsize=1)
 def _extracao_chain():
     """Cria o cliente só no primeiro uso: a API sobe mesmo sem a chave, já que a IA só é usada sem layout."""
-    api_key = os.getenv("TOKEN_API_LLM")
+    from services import credenciais
+    api_key = credenciais.obter("TOKEN_API_LLM")
     if not api_key:
-        raise ErroIA("TOKEN_API_LLM não configurado no .env.")
+        raise ErroIA("TOKEN_API_LLM não configurado (.env ou Gerenciador de Credenciais).")
     llm = ChatOpenAI(
         base_url=base_url,
         api_key=api_key,
