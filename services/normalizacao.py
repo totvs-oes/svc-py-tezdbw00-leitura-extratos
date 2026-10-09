@@ -14,6 +14,7 @@ BANCOS = {
     "0341": ["ITAU"],
     "0422": ["SAFRA"],
     "0707": ["DAYCOVAL", "DAYCONNECT"],
+    "0634": ["TRIBANCO", "BANCO TRIANGULO"],
 }
 
 RE_VALOR = re.compile(r"\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2}")

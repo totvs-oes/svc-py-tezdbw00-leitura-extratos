@@ -40,3 +40,26 @@ def test_primeira_linha_de_cada_pagina_nao_se_perde(extrato):
 def test_extrato_normal_do_itau_continua_no_layout_itau():
     _, e = transcrever_arquivo(PASTA_EXEMPLOS / "ITAU 6896-9 10-09.pdf")
     assert e.metodo == "layout Itaú"
+
+
+@pytest.mark.parametrize("arquivo, quantidade, total", [
+    ("TARIFAS ITAU 10-09.pdf", 110, "113.20"),   # resumo com "Custas 0,00" na linha: total pela posição
+    ("TARIFAS ITAU 11-09.pdf", 47, "44.53"),     # + TN/TQ de negativação (53,00) fora: total 97,53
+])
+def test_outros_dias_fecham_com_o_total_de_deducoes(arquivo, quantidade, total):
+    caminho = PASTA_EXEMPLOS / arquivo
+    if not caminho.exists():
+        pytest.skip(f"{arquivo} ausente")
+    _, e = transcrever_arquivo(caminho)
+    assert len(e.lancamentos) == quantidade
+    assert sum(Decimal(str(l.valor)) for l in e.lancamentos) == Decimal(total)
+    assert e.conferencia.ok is True
+
+
+def test_boleto_de_outra_carteira_tem_o_proprio_nosso_numero():
+    """10/09/2026: o TM da carteira 157 (000407527 BAZAR TUDO) saía com o nosso nº do boleto anterior."""
+    caminho = PASTA_EXEMPLOS / "TARIFAS ITAU 10-09.pdf"
+    if not caminho.exists():
+        pytest.skip("PDF ausente")
+    _, e = transcrever_arquivo(caminho)
+    assert e.lancamentos[-1].historico.startswith("TAR MANUT TIT VENCIDO 000407527 BAZAR TUDO")

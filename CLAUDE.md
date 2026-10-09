@@ -60,9 +60,14 @@ routers/                       sftp_router (listar e ler do SFTP), extratos_rout
 cliente/                       script que roda no Windows Server do cliente: entrada -> API -> lidos | erro
 ```
 
-Layouts: Tarifas ABC, ABC, Caixa, Banco do Brasil, Bradesco, Tarifas Itaú, Itaú, Safra, Santander, Daycoval.
+Layouts: Tarifas ABC, ABC (2 formatos), Tribanco, Caixa vinculada, Caixa, Tarifas BB, Banco do Brasil, Bradesco, Tarifas Itaú, Itaú, Safra, Santander, Daycoval.
 
-- **Tarifas Itaú** (`extrair_tarifas_itau`): relatório "Movimentação de Títulos" (arquivo `TARIFAS ITAU`), detalhe da linha `TAR/CUSTAS COBRANCA` do extrato. Uma tarifa por boleto: código `01` (valor em "Outros Valores") e histórico `TM` (valor em "Crédito/Débito"). Conferência = soma das tarifas == "Total Deduções" do resumo (vai em `saldo_anterior`, com `saldo_final` 0). As palavras são reagrupadas pela altura real (a 1ª linha de cada página sai grudada no cabeçalho).
+- **Caixa**: lê o período inteiro + "Lançamentos do Dia" (só o "do Dia" perdia o dia do movimento). **Caixa vinculada**: saldo anterior numa frase fora da tabela (`saldo_anterior_no_texto`).
+- **ABC "Extrato detalhado"** (desde 11/09/2026): "Nro." acima do cabeçalho e nº do documento no histórico (`prefixo_do_historico` o remove).
+- **Tarifas BB** (`extrair_tarifas_bb`): "Consulta movimento do dia", uma tarifa por título (coluna Tarifa > 0); sem total no PDF: quem confere é o robô (soma = "Tar. agrupadas" do extrato).
+- `_separar_cabecalho_grudado`: separa pela altura a 1ª linha da tabela que a junção de células grudou no cabeçalho (BB de 16/09).
+
+- **Tarifas Itaú** (`extrair_tarifas_itau`): relatório "Movimentação de Títulos" (arquivo `TARIFAS ITAU`), detalhe da linha `TAR/CUSTAS COBRANCA` do extrato. Uma tarifa por boleto (carteiras 109, 157...): código `01` (valor em "Outros Valores") e histórico `TM` (valor em "Crédito/Débito"). TN/TQ/TC (negativação) o extrato debita à parte: não viram lançamento, só entram na conferência. Total Deduções lido pela posição (valor abaixo do rótulo). Conferência = soma das tarifas == "Total Deduções" do resumo (vai em `saldo_anterior`, com `saldo_final` 0). As palavras são reagrupadas pela altura real (a 1ª linha de cada página sai grudada no cabeçalho).
 
 ## Convenções
 

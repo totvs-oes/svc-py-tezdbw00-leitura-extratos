@@ -11,6 +11,18 @@
   "total_creditos": 434518.41,
   "total_debitos": 392868.85
  },
+ "ABC 6609345-9 11-09.pdf": {
+  "banco": "banco_0246",
+  "conferencia_ok": true,
+  "conta": "0066093459",
+  "impressao_digital": "6cfefc936567be94ba11d7b95b6a6041f18b596da42b6e1c01dae8a6425d3ab9",
+  "lancamentos": 18,
+  "metodo": "layout ABC",
+  "saldo_anterior": 501.29,
+  "saldo_final": 271541.41,
+  "total_creditos": 999290.04,
+  "total_debitos": 728249.92
+ },
  "ABC 6609348-3 10-09.pdf": {
   "banco": "banco_0246",
   "conferencia_ok": true,
@@ -23,17 +35,41 @@
   "total_creditos": 759862.47,
   "total_debitos": 131779.36
  },
+ "ABC 6609348-3 11-09.pdf": {
+  "banco": "banco_0246",
+  "conferencia_ok": true,
+  "conta": "0066093483",
+  "impressao_digital": "857df4f6481f6ba95d951bb58614109f7533d0f6a536b0f2526e62930822279d",
+  "lancamentos": 4,
+  "metodo": "layout ABC",
+  "saldo_anterior": 0.0,
+  "saldo_final": 0.0,
+  "total_creditos": 860809.34,
+  "total_debitos": 860809.34
+ },
  "BANCO CAIXA 10-09.pdf": {
   "banco": "banco_0104",
   "conferencia_ok": true,
   "conta": "000576980561-3",
-  "impressao_digital": "387f01091b619c0d201df8d6266b5c2d85e6265221d4c3003c39dd399314ffe1",
-  "lancamentos": 4,
+  "impressao_digital": "b545833eed496aeed3fcdc436b61257c12ca612fcfbcd5848cb12a0e2b7d09a5",
+  "lancamentos": 49,
   "metodo": "layout Caixa",
-  "saldo_anterior": 6161.5,
+  "saldo_anterior": 8140.99,
   "saldo_final": 496401.64,
-  "total_creditos": 490401.14,
-  "total_debitos": 161.0
+  "total_creditos": 1159466.48,
+  "total_debitos": 671205.83
+ },
+ "BANCO CAIXA 11-09.pdf": {
+  "banco": "banco_0104",
+  "conferencia_ok": true,
+  "conta": "000576980561-3",
+  "impressao_digital": "90e40687f1aeb49a8362bc3f497d14533b9a0b2a36e1affbdf184079542c9532",
+  "lancamentos": 29,
+  "metodo": "layout Caixa",
+  "saldo_anterior": 123083.45,
+  "saldo_final": 495543.35,
+  "total_creditos": 643842.11,
+  "total_debitos": 271382.21
  },
  "BANCO DO BRASIL 410004 10-09.pdf": {
   "banco": "banco_0001",
@@ -46,6 +82,18 @@
   "saldo_final": 360531.62,
   "total_creditos": 406981.91,
   "total_debitos": 313416.94
+ },
+ "BANCO DO BRASIL 410004 16-09.pdf": {
+  "banco": "banco_0001",
+  "conferencia_ok": true,
+  "conta": "41000-4",
+  "impressao_digital": "3bac1e906da54e2a0b03e21fe19050c2649c01e0d2466b6ce9161e4886a15d6b",
+  "lancamentos": 29,
+  "metodo": "layout Banco do Brasil",
+  "saldo_anterior": 505033.91,
+  "saldo_final": 466652.99,
+  "total_creditos": 339816.68,
+  "total_debitos": 378197.6
  },
  "BRADESCO 3179-8 10-09.pdf": {
   "banco": "banco_0237",
@@ -70,6 +118,18 @@
   "saldo_final": 5056140.77,
   "total_creditos": 8583401.44,
   "total_debitos": 3700197.74
+ },
+ "CAIXA VINCULADA 11-09.pdf": {
+  "banco": "banco_0104",
+  "conferencia_ok": true,
+  "conta": "4266/1292/000572845528-6",
+  "impressao_digital": "77605d739b1020afd36f708f17d3e56e1d77d407ef9f49cd61c12a9a85710a52",
+  "lancamentos": 30,
+  "metodo": "layout Caixa vinculada",
+  "saldo_anterior": 0.0,
+  "saldo_final": 0.0,
+  "total_creditos": 1247092.63,
+  "total_debitos": 1247092.63
  },
  "DAYCOVAL 1500926-4 04-09.pdf": {
   "banco": "banco_0707",
@@ -191,6 +251,42 @@
   "total_creditos": 0.0,
   "total_debitos": 5.74
  },
+ "TARIFAS BB 09-09 I.pdf": {
+  "banco": "banco_0001",
+  "conferencia_ok": null,
+  "conta": "41000-4",
+  "impressao_digital": "959951cde24ea298233a939fedb3d6ebd05e4d94b240fa57cda6443c452753cf",
+  "lancamentos": 3,
+  "metodo": "layout Tarifas BB",
+  "saldo_anterior": null,
+  "saldo_final": null,
+  "total_creditos": 0.0,
+  "total_debitos": 7.47
+ },
+ "TARIFAS BB 09-09 II.pdf": {
+  "banco": "banco_0001",
+  "conferencia_ok": null,
+  "conta": "41000-4",
+  "impressao_digital": "8737dfc320bd1d392a926728d0cd5223fda645f30a107ce76607319734cb5cc6",
+  "lancamentos": 1,
+  "metodo": "layout Tarifas BB",
+  "saldo_anterior": null,
+  "saldo_final": null,
+  "total_creditos": 0.0,
+  "total_debitos": 6.87
+ },
+ "TARIFAS BB 11-09 III.pdf": {
+  "banco": "banco_0001",
+  "conferencia_ok": null,
+  "conta": "41000-4",
+  "impressao_digital": "c5f5565793aa1330c834ffd847b2141d90d7c9b281dc679236a6ea21ea5a917f",
+  "lancamentos": 2,
+  "metodo": "layout Tarifas BB",
+  "saldo_anterior": null,
+  "saldo_final": null,
+  "total_creditos": 0.0,
+  "total_debitos": 13.74
+ },
  "TARIFAS ITAU 09-09.pdf": {
   "banco": "banco_0341",
   "conferencia_ok": true,
@@ -202,5 +298,41 @@
   "saldo_final": 0.0,
   "total_creditos": 0.0,
   "total_debitos": 342.76
+ },
+ "TARIFAS ITAU 10-09.pdf": {
+  "banco": "banco_0341",
+  "conferencia_ok": true,
+  "conta": "4685/08311-7",
+  "impressao_digital": "a738cce41a9f88494275af95eb6abb9c66ec92581ae852eb8f145dff99acac66",
+  "lancamentos": 110,
+  "metodo": "layout Tarifas Itaú",
+  "saldo_anterior": 113.2,
+  "saldo_final": 0.0,
+  "total_creditos": 0.0,
+  "total_debitos": 113.2
+ },
+ "TARIFAS ITAU 11-09.pdf": {
+  "banco": "banco_0341",
+  "conferencia_ok": true,
+  "conta": "4685/08311-7",
+  "impressao_digital": "2e9b0fbb1065e3c06f3ceeb63fd772bce6122f711ff1414210944c47cc7ea5a9",
+  "lancamentos": 47,
+  "metodo": "layout Tarifas Itaú",
+  "saldo_anterior": 44.53,
+  "saldo_final": 0.0,
+  "total_creditos": 0.0,
+  "total_debitos": 44.53
+ },
+ "TRIBANCO 11-09.pdf": {
+  "banco": "banco_0634",
+  "conferencia_ok": true,
+  "conta": "0230032-0",
+  "impressao_digital": "a01454bd165439aad7d20b09e5c691129460e9ddf3bae8c874871615b84a4233",
+  "lancamentos": 2,
+  "metodo": "layout Tribanco",
+  "saldo_anterior": 58465.25,
+  "saldo_final": 155383.83,
+  "total_creditos": 97040.68,
+  "total_debitos": 122.1
  }
 }

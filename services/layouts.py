@@ -50,6 +50,12 @@ class Layout:
     aplicacao_automatica: Optional[str] = None
     # Extrato sem tabela de colunas (ex.: Daycoval): parser próprio no lugar do de colunas
     parser: Optional[Callable[[list[list[Linha]], "Layout", str, Optional[str]], "ResultadoLayout"]] = None
+    # Regex removida do início do histórico (ex.: ABC novo: nº do documento sem coluna própria)
+    prefixo_do_historico: Optional[str] = None
+    # Regex (um grupo) do saldo anterior quando ele vem fora da tabela (ex.: Caixa vinculada)
+    saldo_anterior_no_texto: Optional[str] = None
+    # Regex de linhas da tabela que não são lançamento nem saldo da conta (ex.: Tribanco "SALDO VINCULADO/BLOQUEADO")
+    ignorar_linhas: Optional[str] = None
 
 
 LAYOUTS: list[Layout] = [
@@ -72,14 +78,57 @@ LAYOUTS: list[Layout] = [
         conta=r"Conta:\s*(\d+)|\b(00\d{8})\b",
         fim_da_tabela=r"^CANAL:|^OS SALDOS",
     ),
+    # ABC "Extrato detalhado" (visto em 11/09 e 16/09/2026): "Nro. Documento" no lugar de "Quantidade" e
+    # "Saldo diário"; pode cobrir mais de um dia (ex.: 10/09 a 11/09) e o débito vem com sinal ("-726.387,29").
+    # Sem coluna para o "Nro. Documento": na conta corrente o "Nro." vem numa linha acima do cabeçalho.
+    Layout(
+        nome="ABC", codigo_banco="0246",
+        identificacao=r"BANCO ABC|ABC BRASIL",
+        colunas=[Coluna("Data", DATA), Coluna("Histórico", HISTORICO),
+                 Coluna("Operação", IGNORAR), Coluna("Valor (R$)", VALOR), Coluna("Saldo diário", SALDO)],
+        conta=r"Conta:\s*(\d+)|\b(00\d{8})\b",
+        fim_da_tabela=r"^CANAL:|^OS SALDOS",
+        prefixo_do_historico=r"^(\d{7}|-)\s+",
+    ),
+    # Tribanco (Banco Triângulo), "REL. DE EXTRATO PERIÓDICO PARA CORRENTISTA" (visto em 11-09): valor com D/C e o
+    # saldo na última coluna; cada dia traz SALDO DISPONIVEL/VINCULADO/BLOQUEADO: só o disponível é o saldo da conta.
+    Layout(
+        nome="Tribanco", codigo_banco="0634",
+        identificacao=r"TRIBANCO|BANCO TRIANGULO",
+        colunas=[Coluna("Data.", DATA), Coluna("Descrição", HISTORICO), Coluna("Doc", IGNORAR, centralizada=True),
+                 Coluna("Valor D/C", VALOR), Coluna("Valor", SALDO)],
+        conta=r"\b(\d{7}-\d)\b",
+        fim_da_tabela=r"^PAGINA \d",
+        ignorar_linhas=r"SALDO (VINCULADO|BLOQUEADO)",
+    ),
+    # Caixa conta vinculada ("CAIXA VINCULADA.pdf", visto em 11-09): mês até a data, valores com sufixo C/D e o
+    # saldo anterior numa frase acima da tabela. Testado antes do "Caixa" (cabeçalhos diferentes).
+    Layout(
+        nome="Caixa vinculada", codigo_banco="0104",
+        identificacao=r"CAIXA",
+        colunas=[Coluna("Data/Hora", DATA), Coluna("Nr. Doc.", CONCATENAR), Coluna("Descrição/Detalhamento", HISTORICO),
+                 Coluna("Valor (R$)", VALOR), Coluna("Saldo(R$)", SALDO)],
+        conta=r"Conta:\s*([\d/-]+)",
+        fim_da_tabela=r"^SAC CAIXA",
+        saldo_anterior_no_texto=r"SALDO ANTERIOR A \d{2}/\d{2}/\d{4}\s+R\$\s*([\d.]+,\d{2}\s*[CD])",
+    ),
     Layout(
         nome="Caixa", codigo_banco="0104",
         identificacao=r"CAIXA",
         colunas=[Coluna("Data Mov.", DATA), Coluna("Nr. Doc.", CONCATENAR), Coluna("Histórico", HISTORICO),
                  Coluna("Valor", VALOR), Coluna("Saldo", SALDO)],
         conta=r"Conta:\s*([^\n]+)",
-        inicio_dos_lancamentos=r"^LANCAMENTOS DO DIA",
+        # Lê o período inteiro + "Lançamentos do Dia" (mesmo saldo corrido). Só o "do Dia" (dia da emissão)
+        # deixava de fora o dia do movimento: o PDF da pasta 11-09 não trazia as tarifas de 10/09 (visto 08/10/2026).
         fim_da_tabela=r"^SAC CAIXA",
+    ),
+    Layout(
+        nome="Tarifas BB", codigo_banco="0001",
+        identificacao=r"^TARIFAS (BB|BANCO DO BRASIL)\b|CONSULTA MOVIMENTO DO DIA",
+        colunas=[],
+        conta=r"Benefici\w+\s+(\d{4,6}-[\dX])\b",
+        conferir_saldo=False,
+        parser=lambda paginas, layout, texto, ano: extrair_tarifas_bb(paginas, layout, texto, ano),
     ),
     Layout(
         nome="Banco do Brasil", codigo_banco="0001",
@@ -88,7 +137,7 @@ LAYOUTS: list[Layout] = [
                  Coluna("Histórico", HISTORICO), Coluna("Documento", IGNORAR, centralizada=True),
                  Coluna("Valor R$", VALOR), Coluna("Saldo", SALDO)],
         conta=r"Conta corrente\s+(\d[\d-]*)",
-        fim_da_tabela=r"^LANCAMENTOS FUTUROS",
+        fim_da_tabela=r"^LANCAMENTOS FUTUROS|LIMITE ESPECIAL DA CONTA",   # 16-09: sem "Lançamentos futuros"; vem o limite
         anexar_linhas_sem_valor=True,
     ),
     Layout(
@@ -164,6 +213,7 @@ def identificar_layout(nome_arquivo: str, zona: str, paginas: Optional[list[list
 def _confirmado(layout: Layout, paginas: list[list[Linha]]) -> bool:
     if layout.parser:  # sem tabela de colunas (Daycoval): vale a identificação
         return True
+    paginas = _separar_cabecalho_grudado(paginas, layout)
     return any(_localizar_cabecalho(linha, layout) is not None for pagina in paginas for linha in pagina)
 
 
@@ -182,6 +232,26 @@ class _Faixa:
     x0: float           # início do cabeçalho
     x1: float           # fim do cabeçalho
     inicio: float = 0   # a partir de qual X uma palavra de texto pertence a esta coluna
+
+
+def _separar_cabecalho_grudado(paginas: list[list[Linha]], layout: Layout) -> list[list[Linha]]:
+    """A junção de células quebradas (pdf_service) às vezes gruda a 1ª linha da tabela no cabeçalho (BB de 16/09/2026:
+    "Dt. 14/09/2026 balancete ..."); ordenadas por X, as palavras se intercalam e o cabeçalho não é reconhecido.
+    Separa essa linha em duas pela altura: cabeçalho e linha de lançamento."""
+    resultado = []
+    for pagina in paginas:
+        nova: list[Linha] = []
+        for linha in pagina:
+            if _localizar_cabecalho(linha, layout) is None:
+                alturas = sorted({round(p[3]) for p in linha})
+                grupos = [[p for p in linha if abs(round(p[3]) - y) <= 1] for y in alturas]
+                cabecalho = next((g for g in grupos if len(g) < len(linha) and _localizar_cabecalho(g, layout)), None)
+                if cabecalho:
+                    nova += [cabecalho, [p for p in linha if p not in cabecalho]]
+                    continue
+            nova.append(linha)
+        resultado.append(nova)
+    return resultado
 
 
 def _localizar_cabecalho(linha: Linha, layout: Layout) -> Optional[list[_Faixa]]:
@@ -278,6 +348,7 @@ def extrair_com_layout(paginas: list[list[Linha]], layout: Layout, texto: str, a
     if layout.parser:
         return layout.parser(paginas, layout, texto, ano)
     resultado = ResultadoLayout(conta=_extrair_conta(layout, texto))
+    paginas = _separar_cabecalho_grudado(paginas, layout)
 
     faixas: Optional[list[_Faixa]] = None
     na_tabela = False
@@ -292,6 +363,8 @@ def extrair_com_layout(paginas: list[list[Linha]], layout: Layout, texto: str, a
     for pagina in paginas:
         for linha in pagina:
             texto_linha = sem_acentos(renderizar(linha)).strip()
+            if layout.ignorar_linhas and re.search(layout.ignorar_linhas, texto_linha):
+                continue
 
             if layout.inicio_dos_lancamentos and re.search(layout.inicio_dos_lancamentos, texto_linha):
                 lancamentos_liberados = True
@@ -312,6 +385,8 @@ def extrair_com_layout(paginas: list[list[Linha]], layout: Layout, texto: str, a
 
             historico = " ".join(celulas.get(HISTORICO, []) + celulas.get(CONCATENAR, []))
             historico = " ".join(historico.split())
+            if layout.prefixo_do_historico:
+                historico = re.sub(layout.prefixo_do_historico, "", historico, count=1)
 
             saldo = parse_saldo(celulas[SALDO][-1]) if SALDO in celulas else None
             valor, operacao = _valor_e_operacao(celulas, layout)
@@ -360,6 +435,8 @@ def extrair_com_layout(paginas: list[list[Linha]], layout: Layout, texto: str, a
         if not resultado.lancamentos:
             resultado.saldo_anterior = ultimo_saldo
         resultado.saldo_final = ultimo_saldo
+        if layout.saldo_anterior_no_texto and (m := re.search(layout.saldo_anterior_no_texto, sem_acentos(texto))):
+            resultado.saldo_anterior = parse_saldo(m.group(1))
     return resultado
 
 
@@ -474,14 +551,15 @@ def extrair_daycoval(paginas: list[list[Linha]], layout: Layout, texto: str, ano
 #   ...
 #   Resumo das Deduções:  Tarifa - 0,00 +  Custas 342,76 -  Total Deduções 342,76 -
 #
-# Tarifas: código 01 (tarifa de cobrança, valor em "Outros Valores") e histórico TM (manutenção de título vencido,
-# valor em "Crédito/Débito"). Código 04 (juros) e 05 (desconto) não são tarifas. Cada tarifa vira um lançamento.
+# Tarifas: código 01 (tarifa de cobrança, valor em "Outros Valores") e históricos T? (TM = manutenção de título
+# vencido; TN, TQ...; valor em "Crédito/Débito"). Código 04 (juros) e 05 (desconto) não são tarifas. Cada tarifa vira um lançamento.
 # Conferência: a soma das tarifas tem que dar o "Total Deduções" do resumo, ao centavo.
 #
 # As palavras são reagrupadas pela altura real na página: a junção de células quebradas do pdf_service gruda a
 # primeira linha de cada página no cabeçalho, e a tarifa dela se perderia.
 
-RE_TARIFAS_ITAU_TOTAL = re.compile(r"TOTAL DEDU\w*\s+(-?[\d.]+,\d{2})")
+RE_TARIFAS_ITAU_CARTEIRA = re.compile(r"\d{3}")            # 109, 157... (10/09/2026 trouxe a carteira 157)
+RE_TARIFAS_ITAU_NOSSO_NUMERO = re.compile(r"\d{6,9}-?\d?")  # "00129495-8" (09/09) ou "001307990" (10/09)
 RE_TARIFAS_ITAU_EMISSAO = re.compile(r"(\d{2}/\d{2}/\d{2,4})")
 TOLERANCIA_COLUNA = 20  # pt: distância máxima entre a palavra e o X do cabeçalho ("09/09" fica 15 pt depois de "Dia/mês")
 
@@ -518,6 +596,7 @@ def extrair_tarifas_itau(paginas: list[list[Linha]], layout: Layout, texto: str,
     colunas: Optional[dict[str, float]] = None
     titulo = ""            # "<nosso nº> <pagador>" do boleto da linha atual (a linha do 01 pode vir sozinha)
     dia_mes: Optional[str] = None
+    fora_do_agrupado = 0.0  # tarifas de negativação (TN/TQ/TC): o extrato debita em linhas próprias
     for pagina in paginas:
         linhas = _linhas_visuais(pagina)
         colunas = _colunas_tarifas_itau(linhas) or colunas
@@ -528,7 +607,8 @@ def extrair_tarifas_itau(paginas: list[list[Linha]], layout: Layout, texto: str,
             return abs(p[0] - colunas[coluna]) <= TOLERANCIA_COLUNA
 
         for linha in linhas:
-            if linha[0][4] == "109" and len(linha) > 2:  # linha de boleto (carteira 109)
+            if (len(linha) > 2 and RE_TARIFAS_ITAU_CARTEIRA.fullmatch(linha[0][4])
+                    and RE_TARIFAS_ITAU_NOSSO_NUMERO.fullmatch(linha[1][4])):  # linha de boleto: carteira + nosso nº
                 pagador = [p[4] for p in linha if colunas["hist"] - 380 < p[0] < colunas["hist"] - 180
                            and not RE_DINHEIRO.fullmatch(p[4]) and not RE_DATA.fullmatch(p[4]) and not p[4].isdigit()]
                 titulo = f"{linha[1][4]} {' '.join(pagador)}".strip()
@@ -544,16 +624,89 @@ def extrair_tarifas_itau(paginas: list[list[Linha]], layout: Layout, texto: str,
                 if valor and (v := parse_valor(valor[4])[0]):
                     resultado.lancamentos.append(Lancamento(
                         data=data, historico=f"TAR COBRANCA {titulo}", operacao="debito", valor=v))
-            # TM = tarifa de manutenção de título vencido: valor (débito) na coluna "Crédito/Débito"
-            elif historico == "TM":
+            # Históricos "T?" com valor (débito) na coluna "Crédito/Débito":
+            #   TM = manutenção de título vencido -> compõe a linha TAR/CUSTAS do extrato: vira lançamento;
+            #   TN/TQ/TC = negativação (entrada/liquidação/cancelamento, 13,25 e 15,65 em 11 e 15/09/2026) -> o
+            #   extrato já debita em linhas próprias ("TAR NEGAT ENT/LIQ/CAN"), lançadas como tarifa comum: só entram
+            #   na conferência com o "Total Deduções". Código novo que não seja tarifa aparece na conferência.
+            elif len(historico) == 2 and historico.startswith("T"):
                 valor = next((p for p in linha if RE_DINHEIRO.fullmatch(p[4]) and p[0] >= colunas["cd"] - 20), None)
                 if valor and (v := parse_valor(valor[4])[0]):
-                    resultado.lancamentos.append(Lancamento(
-                        data=data, historico=f"TAR MANUT TIT VENCIDO {titulo}", operacao="debito", valor=v))
+                    if historico == "TM":
+                        resultado.lancamentos.append(Lancamento(
+                            data=data, historico=f"TAR MANUT TIT VENCIDO {titulo}", operacao="debito", valor=v))
+                    else:
+                        fora_do_agrupado += v
 
-    # Conferência: total das tarifas lidas = "Total Deduções" do resumo (saldo_anterior - débitos = saldo_final 0)
-    if total := RE_TARIFAS_ITAU_TOTAL.search(normalizado):
-        resultado.saldo_anterior = parse_valor(total.group(1))[0]
+    # Conferência: tarifas lidas + as debitadas à parte = "Total Deduções" do resumo
+    # (saldo_anterior - débitos = saldo_final 0)
+    if (total := _total_deducoes_itau(paginas)) is not None:
+        resultado.saldo_anterior = round(total - fora_do_agrupado, 2)
         resultado.saldo_final = 0.0
     return resultado
+
+
+# ---------------------------------------------------------------------------
+# Tarifas BB: "Consulta movimento do dia" (detalhe da linha "Débito Serviço Cobrança Tar. agrupadas" do extrato)
+# ---------------------------------------------------------------------------
+#
+#   Data do movimento 11/09/2026        Títulos - Instrucoes Diversas      (um PDF por tipo: Baixado, Registrado...)
+#   Nosso nro.  Nome do Sacado  Vencto. Dt.oper Vl.título Tarifa Acrésc. Desc Op. Vl.líquido Nº beneficiário
+#   16022480003143306-  MARINHO E TRAPP
+#                       03/09/2026 11/09/2026 1.259,91  6,87  0,00   TEC  0,00  000126264
+#   3                   ARMARINHOS LTDA
+#
+# Cada título com "Tarifa" > 0 vira um lançamento (RGP registro, BX baixa, TEC instrução...). Linha DCA (cartório)
+# vem com tarifa 0,00 e fica de fora. Não há total no relatório: quem confere é o robô (soma dos relatórios do dia ==
+# tarifa agrupada do extrato; validado em 09/09, 11/09 e 14/09/2026).
+
+RE_TARIFAS_BB_NOSSO_NUMERO = re.compile(r"\d{15,20}-?")
+RE_TARIFAS_BB_DATA_MOVIMENTO = re.compile(r"DATA DO MOVIMENTO\s+(\d{2}/\d{2}/\d{4})")
+
+
+def extrair_tarifas_bb(paginas: list[list[Linha]], layout: Layout, texto: str, ano: Optional[str]) -> ResultadoLayout:
+    resultado = ResultadoLayout(conta=_extrair_conta(layout, texto))
+    movimento = RE_TARIFAS_BB_DATA_MOVIMENTO.search(sem_acentos(texto))
+    data = movimento.group(1) if movimento else None
+    x_tarifa = x_op = None
+    nosso, sacado = "", []
+    for pagina in paginas:
+        for linha in _linhas_visuais(pagina):
+            for p in linha:
+                if p[4] == "Tarifa":
+                    x_tarifa = p[0]
+                elif p[4] == "Op.":
+                    x_op = p[0]
+            if x_tarifa is None:
+                continue
+            if RE_TARIFAS_BB_NOSSO_NUMERO.fullmatch(linha[0][4]):  # linha do título: nosso nº + início do sacado
+                nosso = linha[0][4].rstrip("-")
+                sacado = [p[4] for p in linha[1:] if p[0] < x_tarifa - 100]
+                continue
+            valor = next((p for p in linha if abs(p[0] - x_tarifa) <= 15 and RE_DINHEIRO.fullmatch(p[4])), None)
+            if valor and (v := parse_valor(valor[4])[0]):
+                op = next((p[4] for p in linha if x_op is not None and abs(p[0] - x_op) <= 15 and p[4].isalpha()), "")
+                historico = " ".join(["TAR COBRANCA BB", op, nosso] + sacado)
+                resultado.lancamentos.append(Lancamento(data=data, historico=" ".join(historico.split()),
+                                                        operacao="debito", valor=v))
+    return resultado
+
+
+def _total_deducoes_itau(paginas: list[list[Linha]]) -> Optional[float]:
+    """Valor sob o rótulo "Total Deduções": o mais à direita da linha seguinte ao cabeçalho do resumo.
+
+    Pela posição, não pela ordem do texto: em 10/09/2026 o resumo trouxe "Custas 0,00" na mesma linha e a ordem do
+    texto mudou; o valor continua na coluna do rótulo (ex.: rótulo em x=692, valor em x=740).
+    """
+    for pagina in paginas:
+        linhas = _linhas_visuais(pagina)
+        for i, linha in enumerate(linhas[:-1]):
+            textos = [sem_acentos(p[4]).upper() for p in linha]
+            for j in range(len(textos) - 1):
+                if textos[j] == "TOTAL" and textos[j + 1].startswith("DEDU"):
+                    x_rotulo = linha[j][0]
+                    valores = [p for p in linhas[i + 1] if p[0] >= x_rotulo and RE_DINHEIRO.fullmatch(p[4])]
+                    if valores:
+                        return parse_valor(max(valores, key=lambda p: p[0])[4])[0]
+    return None
 
