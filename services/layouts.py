@@ -330,17 +330,24 @@ def _distribuir(linha: Linha, faixas: list[_Faixa]) -> dict[str, list[str]]:
     """Distribui as palavras da linha nas colunas.
 
     Valores monetários são alinhados à direita ou centralizados: vão para a coluna
-    numérica mais próxima. Textos são alinhados à esquerda: vão para a última coluna cuja
-    faixa começa antes da palavra. A coluna de data só aceita datas: um texto que cai nela
+    numérica mais próxima, desde que alcancem o cabeçalho dela. Textos são alinhados à esquerda: vão para a
+    última coluna cuja faixa começa antes da palavra. A coluna de data só aceita datas: um texto que cai nela
     (histórico que começa à esquerda do cabeçalho) vai para a coluna seguinte.
     """
     faixas_numericas = [f for f in faixas if f.numerica] or faixas
+    tolerancia = 2 * LARGURA_CARACTERE
     celulas: dict[int, list[tuple]] = {}
     for p in _juntar_sufixo_c_d(linha):
+        faixa = None
         if RE_DINHEIRO.fullmatch(p[4].split()[0]):
             centro = (p[0] + p[2]) / 2
-            faixa = min(faixas_numericas, key=lambda f: abs((f.x0 + f.x1) / 2 - centro))
-        else:
+            mais_proxima = min(faixas_numericas, key=lambda f: abs((f.x0 + f.x1) / 2 - centro))
+            # Alinhado à direita, centralizado ou à esquerda, o valor sempre alcança o cabeçalho da coluna.
+            # Número que termina antes dele é texto de outra coluna: Itaú 13/10/2026, razão social
+            # "SUPER MEGA 1,99" virava o valor do PIX (R$ 1,99 no lugar de R$ 2.572,80).
+            if p[2] >= mais_proxima.x0 - tolerancia:
+                faixa = mais_proxima
+        if faixa is None:
             indice = len([f for f in faixas if f.inicio <= p[0]]) - 1
             if faixas[indice].papel == DATA and not RE_DATA.fullmatch(p[4]) and indice + 1 < len(faixas):
                 indice += 1
