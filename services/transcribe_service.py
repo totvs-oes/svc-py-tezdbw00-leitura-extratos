@@ -72,6 +72,7 @@ def transcrever_pdf(nome_arquivo: str, origem: str | bytes) -> tuple[str, Extrat
         lancamentos=resultado.lancamentos,
         conferencia=conferir(resultado.lancamentos, resultado.saldo_anterior, resultado.saldo_final,
                              resultado.nao_listadas),
+        saldos_informados=resultado.saldos_informados,
     )
     return f"banco_{codigo_banco}", extrato
 

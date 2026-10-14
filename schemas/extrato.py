@@ -41,6 +41,13 @@ class MovimentacaoNaoListada(BaseModel):
     explicada: bool = Field(description="True se o extrato mostra atividade de aplicação automática que justifica a diferença.")
 
 
+class SaldoInformado(BaseModel):
+    """Linha de saldo que o banco imprime no meio dos lançamentos (ex.: Safra "SALDO CONTA CORRENTE")."""
+    data: str | None
+    descricao: str
+    valor: float = Field(description="Com sinal: negativo = saldo devedor.")
+
+
 class Conferencia(BaseModel):
     saldo_anterior: float | None
     saldo_final: float | None
@@ -58,3 +65,5 @@ class ExtratoConta(BaseModel):
     conta: str | None
     lancamentos: list[Lancamento]
     conferencia: Conferencia
+    saldos_informados: list[SaldoInformado] = Field(
+        default=[], description="Saldos que o banco imprime como linhas (só layouts sem coluna de saldo, ex.: Safra).")

@@ -9,7 +9,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from schemas.extrato import Lancamento, MovimentacaoNaoListada
+from schemas.extrato import Lancamento, MovimentacaoNaoListada, SaldoInformado
 from services.normalizacao import (
     eh_linha_de_saldo,
     normalizar_data,
@@ -61,6 +61,8 @@ class Layout:
     saldo_anterior_no_texto: str | None = None
     # Regex de linhas da tabela que não são lançamento nem saldo da conta (ex.: Tribanco "SALDO VINCULADO/BLOQUEADO")
     ignorar_linhas: str | None = None
+    # Regex (sobre o histórico) das linhas de saldo devolvidas em "saldos_informados" (ex.: Safra, sem coluna de saldo)
+    saldos_informados: str | None = None
 
 
 LAYOUTS: list[Layout] = [
@@ -181,8 +183,10 @@ LAYOUTS: list[Layout] = [
                  Coluna("Nº Documento", CONCATENAR), Coluna("Valor (R$)", VALOR)],
         conta=r"CONTA:\s*(\d[\d-]*)",
         fim_da_tabela=r"^CENTRAL DE SUPORTE",
-        # o Safra não tem coluna de saldo e lista os saldos (inclusive de aplicação) como linhas
+        # o Safra não tem coluna de saldo e lista os saldos (inclusive de aplicação) como linhas: vão em
+        # saldos_informados ("SALDO CONTA CORRENTE" é o que a cliente usa para conciliar a C/C, 14/10/2026)
         conferir_saldo=False,
+        saldos_informados=r"^SALDO\b",
     ),
     Layout(
         nome="Santander", codigo_banco="0033",
@@ -374,6 +378,7 @@ class ResultadoLayout:
     saldo_anterior: float | None = None
     saldo_final: float | None = None
     nao_listadas: list[MovimentacaoNaoListada] = field(default_factory=list)
+    saldos_informados: list[SaldoInformado] = field(default_factory=list)
 
 
 def extrair_com_layout(paginas: list[list[Linha]], layout: Layout, texto: str, ano: str | None) -> ResultadoLayout:
@@ -448,6 +453,10 @@ def extrair_com_layout(paginas: list[list[Linha]], layout: Layout, texto: str, a
                     anterior.historico = f"{anterior.historico} {' '.join(renderizar(linha).split())}"
                 continue
 
+            if layout.saldos_informados and re.search(layout.saldos_informados, sem_acentos(historico)):
+                resultado.saldos_informados.append(SaldoInformado(
+                    data=ultima_data, descricao=historico, valor=valor if operacao == "credito" else -valor))
+                continue
             # Linhas de saldo e valores zerados não são lançamentos
             if eh_linha_de_saldo(historico) or valor == 0 or not lancamentos_liberados:
                 if saldo is None and eh_linha_de_saldo(historico) and layout.conferir_saldo:

@@ -48,3 +48,18 @@ def test_tribanco_com_leitor_fixo_e_so_o_saldo_disponivel():
     assert (e.metodo, e.conta, e.conferencia.ok) == ("layout Tribanco", "0230032-0", True)
     assert [(l.operacao, l.valor, l.historico) for l in e.lancamentos] == [
         ("debito", 122.1, "TAR MANUTENCAO C/C-REF.09/2026"), ("credito", 97040.68, "TED C RECEBIDA-MARTINS COMERCIO E S")]
+
+
+def test_safra_devolve_as_linhas_de_saldo_em_saldos_informados():
+    """O Safra não tem coluna de saldo: os saldos vêm como linhas. "SALDO CONTA CORRENTE" do dia é o que a cliente usa
+    para conciliar a C/C (14/10/2026); as linhas de saldo não viram lançamento."""
+    e = _ler("SAFRA 580275-7  10-09.pdf")
+    saldos = {(s.data, s.descricao): s.valor for s in e.saldos_informados}
+    assert saldos[("09/09/2026", "SALDO CONTA CORRENTE")] == 36357.41
+    assert saldos[("08/09/2026", "SALDO CONTA CORRENTE")] == 450.68
+    assert not any(l.historico.startswith("SALDO") for l in e.lancamentos)
+    # os saldos impressos fecham com os lançamentos do dia: 450,68 + 35.908,23 - 1,50
+    do_dia = [l for l in e.lancamentos if l.data == "09/09/2026"]
+    assert round(450.68 + sum(l.valor if l.operacao == "credito" else -l.valor for l in do_dia), 2) == 36357.41
+    vinculada = _ler("SAFRA 326613-1  10-09.pdf")
+    assert {s.valor for s in vinculada.saldos_informados} == {0.0}
