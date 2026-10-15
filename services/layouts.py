@@ -386,6 +386,9 @@ def extrair_com_layout(paginas: list[list[Linha]], layout: Layout, texto: str, a
         return layout.parser(paginas, layout, texto, ano)
     resultado = ResultadoLayout(conta=_extrair_conta(layout, texto))
     paginas = _separar_cabecalho_grudado(paginas, layout)
+    # Datas "dd/mm" (Safra): o ano vem do período do extrato, que pode virar o ano (31/12/2026 a 04/01/2027)
+    periodo = RE_PERIODO.search(sem_acentos(texto))
+    periodo = periodo.groups() if periodo else None
 
     faixas: list[_Faixa] | None = None
     na_tabela = False
@@ -418,7 +421,7 @@ def extrair_com_layout(paginas: list[list[Linha]], layout: Layout, texto: str, a
             celulas = _distribuir(linha, faixas)
             datas = RE_DATA.findall(" ".join(celulas.get(DATA, [])))
             if datas:
-                ultima_data = normalizar_data(datas[0], ano)
+                ultima_data = normalizar_data(datas[0], _ano_no_periodo(datas[0], periodo, ano))
 
             historico = " ".join(celulas.get(HISTORICO, []) + celulas.get(CONCATENAR, []))
             historico = " ".join(historico.split())
@@ -540,7 +543,8 @@ def _extrair_conta(layout: Layout, texto: str) -> str | None:
 
 RE_DAYCOVAL_VALOR = re.compile(r"-?R\$\s*[\d.]+,\d{2}")
 RE_DAYCOVAL_LANCAMENTO = re.compile(r"^(\d{2}/\d{2})\s+(.+?)\s+(-?R\$\s*[\d.]+,\d{2})$")
-RE_DAYCOVAL_PERIODO = re.compile(r"(\d{2}/\d{2}/\d{4})\s+A\s+(\d{2}/\d{2}/\d{4})")
+# Período do extrato ("13/10/2026 A 14/10/2026", "29/12/2026 ATE 04/01/2027"): dá o ano das datas "dd/mm"
+RE_PERIODO = re.compile(r"(\d{2}/\d{2}/\d{4})\s+(?:A|ATE)\s+(\d{2}/\d{2}/\d{4})")
 
 
 def _ano_no_periodo(data_curta: str, periodo: tuple[str, str] | None, ano: str | None) -> str | None:
@@ -553,7 +557,7 @@ def _ano_no_periodo(data_curta: str, periodo: tuple[str, str] | None, ano: str |
 
 def extrair_daycoval(paginas: list[list[Linha]], layout: Layout, texto: str, ano: str | None) -> ResultadoLayout:
     resultado = ResultadoLayout(conta=_extrair_conta(layout, texto))
-    periodo = RE_DAYCOVAL_PERIODO.search(sem_acentos(texto))
+    periodo = RE_PERIODO.search(sem_acentos(texto))
     periodo = periodo.groups() if periodo else None
 
     lancamentos: list[Lancamento] = []

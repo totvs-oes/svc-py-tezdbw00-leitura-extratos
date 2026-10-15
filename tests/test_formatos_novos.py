@@ -63,3 +63,16 @@ def test_safra_devolve_as_linhas_de_saldo_em_saldos_informados():
     assert round(450.68 + sum(l.valor if l.operacao == "credito" else -l.valor for l in do_dia), 2) == 36357.41
     vinculada = _ler("SAFRA 326613-1  10-09.pdf")
     assert {s.valor for s in vinculada.saldos_informados} == {0.0}
+
+
+def test_ano_das_datas_curtas_na_virada_do_ano():
+    """Safra e Daycoval escrevem só "dd/mm": o ano vem do período do extrato. Na virada (movimento de 31/12, extrato
+    de 31/12/2026 a 04/01/2027), o 04/01 é de 2027 e não do ano da primeira data do texto."""
+    from services.layouts import RE_PERIODO, _ano_no_periodo
+    from services.normalizacao import normalizar_data, sem_acentos
+    periodo = RE_PERIODO.search(sem_acentos("Lançamentos Período de 31/12/2026 a 04/01/2027")).groups()
+    assert normalizar_data("31/12", _ano_no_periodo("31/12", periodo, "2026")) == "31/12/2026"
+    assert normalizar_data("04/01", _ano_no_periodo("04/01", periodo, "2026")) == "04/01/2027"
+    # data completa não muda; sem período, vale o ano do extrato
+    assert normalizar_data("14/10/2026", _ano_no_periodo("14/10/2026", periodo, "2026")) == "14/10/2026"
+    assert normalizar_data("13/10", _ano_no_periodo("13/10", None, "2026")) == "13/10/2026"
