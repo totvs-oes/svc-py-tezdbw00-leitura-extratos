@@ -63,6 +63,9 @@ class Layout:
     ignorar_linhas: str | None = None
     # Regex (sobre o histórico) das linhas de saldo devolvidas em "saldos_informados" (ex.: Safra, sem coluna de saldo)
     saldos_informados: str | None = None
+    # Regex (grupos: dia, mês por extenso, ano) do cabeçalho de dia que agrupa os lançamentos (ex.: Caixa
+    # "14 de outubro de 2026, quarta-feira"). Com ele, a data do lançamento é a do cabeçalho, não a da linha.
+    cabecalho_do_dia: str | None = None
 
 
 LAYOUTS: list[Layout] = [
@@ -118,6 +121,9 @@ LAYOUTS: list[Layout] = [
         conta=r"Conta:\s*([\d/-]+)",
         fim_da_tabela=r"^SAC CAIXA",
         saldo_anterior_no_texto=r"SALDO ANTERIOR A \d{2}/\d{2}/\d{4}\s+R\$\s*([\d.]+,\d{2}\s*[CD])",
+        # Cliente, 15/10/2026: vale o dia do cabeçalho do grupo ("14 de outubro de 2026, quarta-feira"), mesmo que a
+        # Data/Hora da linha seja de outro dia (tarifas "COB BX/COBPROT" de 15/10 01:25 no grupo de 14/10)
+        cabecalho_do_dia=r"^(\d{1,2}) DE ([A-Z]+) DE (\d{4})\b",
     ),
     Layout(
         nome="Caixa", codigo_banco="0104",
@@ -394,6 +400,7 @@ def extrair_com_layout(paginas: list[list[Linha]], layout: Layout, texto: str, a
     na_tabela = False
     lancamentos_liberados = layout.inicio_dos_lancamentos is None
     ultima_data: str | None = None
+    data_do_grupo: str | None = None   # cabeçalho de dia (layout.cabecalho_do_dia)
     ultimo_saldo: float | None = None
     # Controle de movimentações não listadas (pontos de controle de saldo)
     saldo_corrido: float | None = None
@@ -404,6 +411,9 @@ def extrair_com_layout(paginas: list[list[Linha]], layout: Layout, texto: str, a
         for linha in pagina:
             texto_linha = sem_acentos(renderizar(linha)).strip()
             if layout.ignorar_linhas and re.search(layout.ignorar_linhas, texto_linha):
+                continue
+            if layout.cabecalho_do_dia and (dia := _data_do_cabecalho(layout.cabecalho_do_dia, texto_linha)):
+                data_do_grupo = dia
                 continue
 
             if layout.inicio_dos_lancamentos and re.search(layout.inicio_dos_lancamentos, texto_linha):
@@ -468,7 +478,7 @@ def extrair_com_layout(paginas: list[list[Linha]], layout: Layout, texto: str, a
                 if not resultado.lancamentos:
                     resultado.saldo_anterior = ultimo_saldo
                 resultado.lancamentos.append(Lancamento(
-                    data=ultima_data, historico=historico, operacao=operacao, valor=valor))
+                    data=data_do_grupo or ultima_data, historico=historico, operacao=operacao, valor=valor))
                 if saldo_corrido is not None:
                     saldo_corrido += valor if operacao == "credito" else -valor
 
@@ -482,6 +492,17 @@ def extrair_com_layout(paginas: list[list[Linha]], layout: Layout, texto: str, a
         if layout.saldo_anterior_no_texto and (m := re.search(layout.saldo_anterior_no_texto, sem_acentos(texto))):
             resultado.saldo_anterior = parse_saldo(m.group(1))
     return resultado
+
+
+MESES_POR_EXTENSO = ("JANEIRO", "FEVEREIRO", "MARCO", "ABRIL", "MAIO", "JUNHO", "JULHO", "AGOSTO", "SETEMBRO",
+                     "OUTUBRO", "NOVEMBRO", "DEZEMBRO")
+
+
+def _data_do_cabecalho(regex: str, texto_linha: str) -> str | None:
+    """ "14 DE OUTUBRO DE 2026, QUARTA-FEIRA" -> "14/10/2026" (texto já sem acentos e maiúsculo)."""
+    if (m := re.search(regex, texto_linha)) and m.group(2) in MESES_POR_EXTENSO:
+        return f"{int(m.group(1)):02d}/{MESES_POR_EXTENSO.index(m.group(2)) + 1:02d}/{m.group(3)}"
+    return None
 
 
 def _movimentacao_nao_listada(diferenca: float, data: str | None, datas_vistas: list[str],

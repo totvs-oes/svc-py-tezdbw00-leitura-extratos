@@ -119,11 +119,23 @@
   "total_creditos": 8583401.44,
   "total_debitos": 3700197.74
  },
+ "CAIXA CC 15-10.pdf": {
+  "banco": "banco_0104",
+  "conferencia_ok": true,
+  "conta": "4266/1292/000576980561-3",
+  "impressao_digital": "12caf9826d725f6f6cca7002785da7a52e2d55f9c333cf371ea558238afde63c",
+  "lancamentos": 80,
+  "metodo": "layout Caixa vinculada",
+  "saldo_anterior": 685013.9,
+  "saldo_final": 726533.62,
+  "total_creditos": 1843245.16,
+  "total_debitos": 1801725.44
+ },
  "CAIXA VINCULADA 11-09.pdf": {
   "banco": "banco_0104",
   "conferencia_ok": true,
   "conta": "4266/1292/000572845528-6",
-  "impressao_digital": "77605d739b1020afd36f708f17d3e56e1d77d407ef9f49cd61c12a9a85710a52",
+  "impressao_digital": "9f3bdc7a0bfaeff323864a98c1d9547e9f0205bff2f8ea73f05aff09ede2a2c0",
   "lancamentos": 30,
   "metodo": "layout Caixa vinculada",
   "saldo_anterior": 0.0,

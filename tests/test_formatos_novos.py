@@ -76,3 +76,15 @@ def test_ano_das_datas_curtas_na_virada_do_ano():
     # data completa não muda; sem período, vale o ano do extrato
     assert normalizar_data("14/10/2026", _ano_no_periodo("14/10/2026", periodo, "2026")) == "14/10/2026"
     assert normalizar_data("13/10", _ano_no_periodo("13/10", None, "2026")) == "13/10/2026"
+
+
+def test_caixa_data_do_lancamento_e_a_do_cabecalho_do_dia():
+    """Cliente, 15/10/2026: na Caixa vale o dia do cabeçalho do grupo ("14 de outubro de 2026, quarta-feira"), mesmo
+    que a Data/Hora da linha seja de outro dia: as tarifas de 15/10 01:25 são do movimento de 14/10, e as de
+    14/10 01:55 (no grupo de 13/10) são do movimento de 13/10."""
+    e = _ler("CAIXA CC 15-10.pdf")
+    assert e.conferencia.ok is True
+    do_dia = [(l.historico.split()[0] + " " + l.historico.split()[1], l.valor) for l in e.lancamentos
+              if l.data == "14/10/2026" and l.operacao == "debito"]
+    assert sorted(v for _, v in do_dia) == sorted([1.0, 2.0, 3.0, 119.0, 2.5, 15.0, 12.5, 9.19])
+    assert not any(l.data == "14/10/2026" and "MAN061" in l.historico for l in e.lancamentos)
