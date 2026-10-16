@@ -181,6 +181,9 @@ LAYOUTS: list[Layout] = [
         # só os saldos do dia mostram o efeito
         saldo_da_conta=r"^SALDO (ANTERIOR|MOVIMENTACAO CONTA|EM CONTA CORRENTE)",
         aplicacao_automatica=r"APLIC",
+        # Linhas de saldo do dia devolvidas em saldos_informados: a cliente concilia a C/C pelo "SALDO TOTAL DISPONÍVEL
+        # DIA" (conta + aplicação automática) da data do movimento (16/10/2026)
+        saldos_informados=r"^SALDO (TOTAL DISPONIVEL DIA|MOVIMENTACAO CONTA|EM CONTA CORRENTE)\b",
     ),
     Layout(
         nome="Safra", codigo_banco="0422",
@@ -455,6 +458,17 @@ def extrair_com_layout(paginas: list[list[Linha]], layout: Layout, texto: str, a
                         _movimentacao_nao_listada(saldo - saldo_corrido, ultima_data, datas_vistas, datas_com_aplicacao))
                 saldo_corrido = saldo
 
+            # Linha de saldo informada pelo banco: valor na coluna Valor (Safra) ou na de Saldo (Itaú "SALDO TOTAL
+            # DISPONÍVEL DIA", usado pela cliente para conciliar a C/C, 16/10/2026)
+            informado = None
+            if layout.saldos_informados and re.search(layout.saldos_informados, sem_acentos(historico)):
+                informado = (valor if operacao == "credito" else -valor) if valor is not None else saldo
+                if informado is not None:
+                    resultado.saldos_informados.append(SaldoInformado(data=ultima_data, descricao=historico,
+                                                                      valor=informado))
+            if informado is not None and valor is not None:
+                continue
+
             if valor is None:
                 if saldo is not None:
                     ultimo_saldo = saldo
@@ -466,10 +480,6 @@ def extrair_com_layout(paginas: list[list[Linha]], layout: Layout, texto: str, a
                     anterior.historico = f"{anterior.historico} {' '.join(renderizar(linha).split())}"
                 continue
 
-            if layout.saldos_informados and re.search(layout.saldos_informados, sem_acentos(historico)):
-                resultado.saldos_informados.append(SaldoInformado(
-                    data=ultima_data, descricao=historico, valor=valor if operacao == "credito" else -valor))
-                continue
             # Linhas de saldo e valores zerados não são lançamentos
             if eh_linha_de_saldo(historico) or valor == 0 or not lancamentos_liberados:
                 if saldo is None and eh_linha_de_saldo(historico) and layout.conferir_saldo:

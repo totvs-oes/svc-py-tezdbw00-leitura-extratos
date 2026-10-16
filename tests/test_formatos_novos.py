@@ -88,3 +88,13 @@ def test_caixa_data_do_lancamento_e_a_do_cabecalho_do_dia():
               if l.data == "14/10/2026" and l.operacao == "debito"]
     assert sorted(v for _, v in do_dia) == sorted([1.0, 2.0, 3.0, 119.0, 2.5, 15.0, 12.5, 9.19])
     assert not any(l.data == "14/10/2026" and "MAN061" in l.historico for l in e.lancamentos)
+
+
+def test_itau_devolve_saldo_total_disponivel_do_dia():
+    """Cliente, 16/10/2026: a C/C do Itaú concilia pelo "SALDO TOTAL DISPONÍVEL DIA" (conta + aplicação automática);
+    o "SALDO MOVIMENTAÇÃO CONTA" fica em R$ 1,00 depois da aplicação automática. A conferência continua igual."""
+    e = _ler("ITAU 6896-9  15-10.pdf")
+    assert e.conferencia.ok is True
+    saldos = {(s.data, s.descricao): s.valor for s in e.saldos_informados}
+    assert saldos[("14/10/2026", "SALDO TOTAL DISPONÍVEL DIA")] == 665147.94
+    assert saldos[("14/10/2026", "SALDO MOVIMENTAÇÃO CONTA")] == 1.0

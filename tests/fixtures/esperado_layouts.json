@@ -167,6 +167,18 @@
   "total_creditos": 0.0,
   "total_debitos": 100691.2
  },
+ "ITAU 6896-9  15-10.pdf": {
+  "banco": "banco_0341",
+  "conferencia_ok": true,
+  "conta": "0006896-9",
+  "impressao_digital": "706284edfc01b87a5272b317c1e61959d0b3f2d784a9abe81e11f1457815d106",
+  "lancamentos": 132,
+  "metodo": "layout Itaú",
+  "saldo_anterior": 467258.64,
+  "saldo_final": -98407.74,
+  "total_creditos": 1837116.56,
+  "total_debitos": 2600674.74
+ },
  "ITAU 6896-9 10-09.pdf": {
   "banco": "banco_0341",
   "conferencia_ok": true,
