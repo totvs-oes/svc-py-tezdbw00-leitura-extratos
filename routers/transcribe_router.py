@@ -14,9 +14,10 @@ def transcribe_pdf(
     arquivo: str | None = Query(None, description="Filtra os PDFs de teste pelo nome (ex.: ABC, SAFRA)."),
 ):
     """Só teste: lê os PDFs fixos de docs_example/ (filtro opcional pelo nome do arquivo).
-    Cada lançamento traz `opcao`/`descricao_opcao` da Movimentação Bancária do Protheus (3 = a Pagar, 4 = a Receber)."""
+    Cada extrato e cada lançamento trazem `banco`/`agencia` do Protheus; cada lançamento, `opcao`/`descricao_opcao` da
+    Movimentação Bancária (3 = a Pagar, 4 = a Receber)."""
     try:
         resultado = transcrever(arquivo)
     except ErroIA as erro:
         raise erro_ia_para_http(erro)
-    return {banco: [ExtratoContaComOpcao.de(e) for e in extratos] for banco, extratos in resultado.items()}
+    return {banco: [ExtratoContaComOpcao.de(banco, e) for e in extratos] for banco, extratos in resultado.items()}

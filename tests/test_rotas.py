@@ -89,6 +89,9 @@ def test_transcribe_traz_opcao_da_movimentacao_bancaria(cliente, monkeypatch):
     from routers import transcribe_router
     monkeypatch.setattr(transcribe_router, "transcrever", lambda filtro=None: _extrato_de_teste())
     lancamentos = cliente.post("/transcribe", headers=CABECALHO).json()["banco_0001"][0]["lancamentos"]
+    extrato = cliente.post("/transcribe", headers=CABECALHO).json()["banco_0001"][0]
+    assert (extrato["banco"], extrato["agencia"]) == ("001", "3404")
+    assert {(l["banco"], l["agencia"]) for l in lancamentos} == {("001", "3404")}
     assert [(l["operacao"], l["opcao"], l["descricao_opcao"]) for l in lancamentos] == [
         ("debito", 3, "Movimentação Bancária a Pagar (saída)"),
         ("credito", 4, "Movimentação Bancária a Receber (entrada)")]
@@ -96,9 +99,11 @@ def test_transcribe_traz_opcao_da_movimentacao_bancaria(cliente, monkeypatch):
 
 
 def test_extratos_do_robo_nao_mudam(cliente, monkeypatch):
-    """/extratos (usada pelo robô) continua sem opcao/descricao_opcao."""
+    """/extratos (usada pelo robô) continua sem banco/agencia/opcao/descricao_opcao."""
     from routers import extratos_router
     monkeypatch.setattr(extratos_router, "transcrever_uploads", lambda pdfs: _extrato_de_teste())
     resposta = cliente.post("/extratos", headers=CABECALHO,
                             files={"arquivos": ("a.pdf", b"%PDF-1.4", "application/pdf")})
-    assert set(resposta.json()["banco_0001"][0]["lancamentos"][0]) == {"data", "historico", "operacao", "valor"}
+    extrato = resposta.json()["banco_0001"][0]
+    assert "banco" not in extrato and "agencia" not in extrato
+    assert set(extrato["lancamentos"][0]) == {"data", "historico", "operacao", "valor"}

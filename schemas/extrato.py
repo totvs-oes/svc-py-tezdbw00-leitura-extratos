@@ -2,6 +2,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from services.contas_protheus import agencia, codigo_banco
+
 # ---------------------------------------------------------------------------
 # Schemas usados como "contrato" de saída da LLM (structured output).
 # Os valores vêm como TEXTO, exatamente como estão no PDF; a conversão para
@@ -82,17 +84,28 @@ OPCOES_MOVIMENTACAO_BANCARIA: dict[str, tuple[int, str]] = {
 }
 
 
+BANCO = Field(description='Código do banco no Protheus (ex.: "001"); null se o banco não foi identificado.')
+AGENCIA = Field(description="Agência como está no Cadastro de Bancos do Protheus; null se a conta não é uma das cadastradas.")
+
+
 class LancamentoComOpcao(Lancamento):
+    banco: str | None = BANCO
+    agencia: str | None = AGENCIA
     opcao: int = Field(description="Opção da Movimentação Bancária (FINA100) no Protheus: 3 = a Pagar, 4 = a Receber.")
     descricao_opcao: str
 
 
 class ExtratoContaComOpcao(ExtratoConta):
+    banco: str | None = BANCO
+    agencia: str | None = AGENCIA
     lancamentos: list[LancamentoComOpcao]
 
     @classmethod
-    def de(cls, extrato: ExtratoConta) -> "ExtratoContaComOpcao":
-        lancamentos = [LancamentoComOpcao(**l.model_dump(), opcao=OPCOES_MOVIMENTACAO_BANCARIA[l.operacao][0],
+    def de(cls, chave_banco: str, extrato: ExtratoConta) -> "ExtratoContaComOpcao":
+        """`chave_banco` é a chave do grupo na resposta ("banco_0001")."""
+        banco = codigo_banco(chave_banco)
+        conta = {"banco": banco, "agencia": agencia(banco, extrato.conta)}
+        lancamentos = [LancamentoComOpcao(**l.model_dump(), **conta, opcao=OPCOES_MOVIMENTACAO_BANCARIA[l.operacao][0],
                                           descricao_opcao=OPCOES_MOVIMENTACAO_BANCARIA[l.operacao][1])
                        for l in extrato.lancamentos]
-        return cls(**(extrato.model_dump() | {"lancamentos": lancamentos}))
+        return cls(**(extrato.model_dump() | conta | {"lancamentos": lancamentos}))
