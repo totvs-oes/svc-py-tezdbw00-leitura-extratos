@@ -73,3 +73,32 @@ def test_rota_sftp_recusa_caminho_invalido_com_400(cliente, monkeypatch, tmp_pat
         monkeypatch.setenv(nome, valor)
     resposta = cliente.get("/sftp/listar", params={"caminho": "../fora"}, headers=CABECALHO)
     assert resposta.status_code == 400  # recusado antes de qualquer conexão
+
+
+def _extrato_de_teste():
+    from schemas.extrato import Conferencia, ExtratoConta, Lancamento
+    return {"banco_0001": [ExtratoConta(
+        arquivo="BANCO DO BRASIL 410004 23-10.pdf", metodo="layout Banco do Brasil", conta="41000-4",
+        lancamentos=[Lancamento(data="22/10/2026", historico="Tar Liquid Orpag Exterior", operacao="debito", valor=250.0),
+                     Lancamento(data="22/10/2026", historico="Cobrança", operacao="credito", valor=100.0)],
+        conferencia=Conferencia(saldo_anterior=0, saldo_final=-150, total_creditos=100, total_debitos=250,
+                                diferenca=0, ok=True))]}
+
+
+def test_transcribe_traz_opcao_da_movimentacao_bancaria(cliente, monkeypatch):
+    from routers import transcribe_router
+    monkeypatch.setattr(transcribe_router, "transcrever", lambda filtro=None: _extrato_de_teste())
+    lancamentos = cliente.post("/transcribe", headers=CABECALHO).json()["banco_0001"][0]["lancamentos"]
+    assert [(l["operacao"], l["opcao"], l["descricao_opcao"]) for l in lancamentos] == [
+        ("debito", 3, "Movimentação Bancária a Pagar (saída)"),
+        ("credito", 4, "Movimentação Bancária a Receber (entrada)")]
+    assert lancamentos[0]["historico"] == "Tar Liquid Orpag Exterior" and lancamentos[0]["valor"] == 250.0
+
+
+def test_extratos_do_robo_nao_mudam(cliente, monkeypatch):
+    """/extratos (usada pelo robô) continua sem opcao/descricao_opcao."""
+    from routers import extratos_router
+    monkeypatch.setattr(extratos_router, "transcrever_uploads", lambda pdfs: _extrato_de_teste())
+    resposta = cliente.post("/extratos", headers=CABECALHO,
+                            files={"arquivos": ("a.pdf", b"%PDF-1.4", "application/pdf")})
+    assert set(resposta.json()["banco_0001"][0]["lancamentos"][0]) == {"data", "historico", "operacao", "valor"}

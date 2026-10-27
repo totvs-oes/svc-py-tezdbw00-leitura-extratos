@@ -67,3 +67,32 @@ class ExtratoConta(BaseModel):
     conferencia: Conferencia
     saldos_informados: list[SaldoInformado] = Field(
         default=[], description="Saldos que o banco imprime como linhas (só layouts sem coluna de saldo, ex.: Safra).")
+
+
+# ---------------------------------------------------------------------------
+# Resposta do POST /transcribe: o mesmo extrato, com a opção da rotina Movimentação Bancária (FINA100) do Protheus em
+# cada lançamento, para quem for lançar pela API do Protheus. As rotas que o robô usa (/extratos) não mudam.
+# ---------------------------------------------------------------------------
+
+# 3 = Movimentação Bancária a Pagar (saída), 4 = a Receber (entrada). As demais opções da FINA100 (5 Excluir, 6 Cancelar,
+# 7 Transferência entre contas ou caixas, 8 Estorno de Transferência, 9 Classificação) não saem só do extrato.
+OPCOES_MOVIMENTACAO_BANCARIA: dict[str, tuple[int, str]] = {
+    "debito": (3, "Movimentação Bancária a Pagar (saída)"),
+    "credito": (4, "Movimentação Bancária a Receber (entrada)"),
+}
+
+
+class LancamentoComOpcao(Lancamento):
+    opcao: int = Field(description="Opção da Movimentação Bancária (FINA100) no Protheus: 3 = a Pagar, 4 = a Receber.")
+    descricao_opcao: str
+
+
+class ExtratoContaComOpcao(ExtratoConta):
+    lancamentos: list[LancamentoComOpcao]
+
+    @classmethod
+    def de(cls, extrato: ExtratoConta) -> "ExtratoContaComOpcao":
+        lancamentos = [LancamentoComOpcao(**l.model_dump(), opcao=OPCOES_MOVIMENTACAO_BANCARIA[l.operacao][0],
+                                          descricao_opcao=OPCOES_MOVIMENTACAO_BANCARIA[l.operacao][1])
+                       for l in extrato.lancamentos]
+        return cls(**(extrato.model_dump() | {"lancamentos": lancamentos}))
