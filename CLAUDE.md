@@ -37,7 +37,7 @@ docker compose up -d --build                 # API na porta 5000; cria a rede "t
 - `GET /sftp/listar?caminho=` — lista subpastas e PDFs de uma pasta do SFTP do cliente.
 - `POST /extratos/sftp` — produção. JSON `{"arquivos": [caminhos]}`: baixa do SFTP e lê cada PDF. Arquivo com problema volta com `metodo: "nenhum"` e `aviso` (não derruba os outros). É a rota que o robô usa (`FONTE_EXTRATOS=sftp`).
 - `POST /extratos` — upload `multipart/form-data`, campo `arquivos` (um ou mais PDFs, máx. 20 MB). Usada pelo script do cliente (`cliente/`) e pelo robô em modo local.
-- `POST /transcribe` — só teste: lê os PDFs fixos de `docs_example/` (filtro opcional `?arquivo=ABC`). Cada lançamento traz também `opcao`/`descricao_opcao` da Movimentação Bancária do Protheus (FINA100: 3 = a Pagar para débito, 4 = a Receber para crédito) e, como o extrato, `banco`/`agencia` do Cadastro de Bancos do Protheus (tabela em `services/contas_protheus.py`, pelo número da conta lido do PDF; conta fora da tabela → `agencia: null`), para integração direta pela API do Protheus; `/extratos` e `/extratos/sftp` (robô) não têm esses campos.
+- `POST /transcribe` — só teste: lê os PDFs fixos de `docs_example/` (filtro opcional `?arquivo=ABC`). Cada lançamento traz também `opcao`/`descricao_opcao` da Movimentação Bancária do Protheus (FINA100: 3 = a Pagar para débito, 4 = a Receber para crédito) `conta` (a do extrato) e, como o extrato, `banco`/`agencia` do Cadastro de Bancos do Protheus (tabela em `services/contas_protheus.py`, pelo número da conta lido do PDF; conta fora da tabela → `agencia: null`), para integração direta pela API do Protheus; `/extratos` e `/extratos/sftp` (robô) não têm esses campos.
 
 Resposta: `{"banco_<COMPE>": [ExtratoConta]}` — ver `schemas/extrato.py`.
 

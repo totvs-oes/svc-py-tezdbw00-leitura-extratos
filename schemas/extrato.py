@@ -91,6 +91,7 @@ AGENCIA = Field(description="Agência como está no Cadastro de Bancos do Prothe
 class LancamentoComOpcao(Lancamento):
     banco: str | None = BANCO
     agencia: str | None = AGENCIA
+    conta: str | None = Field(description="Conta do extrato, como o banco imprime (a mesma do campo conta do extrato).")
     opcao: int = Field(description="Opção da Movimentação Bancária (FINA100) no Protheus: 3 = a Pagar, 4 = a Receber.")
     descricao_opcao: str
 
@@ -105,7 +106,7 @@ class ExtratoContaComOpcao(ExtratoConta):
         """`chave_banco` é a chave do grupo na resposta ("banco_0001")."""
         banco = codigo_banco(chave_banco)
         conta = {"banco": banco, "agencia": agencia(banco, extrato.conta)}
-        lancamentos = [LancamentoComOpcao(**l.model_dump(), **conta, opcao=OPCOES_MOVIMENTACAO_BANCARIA[l.operacao][0],
+        lancamentos = [LancamentoComOpcao(**l.model_dump(), **conta, conta=extrato.conta, opcao=OPCOES_MOVIMENTACAO_BANCARIA[l.operacao][0],
                                           descricao_opcao=OPCOES_MOVIMENTACAO_BANCARIA[l.operacao][1])
                        for l in extrato.lancamentos]
         return cls(**(extrato.model_dump() | conta | {"lancamentos": lancamentos}))

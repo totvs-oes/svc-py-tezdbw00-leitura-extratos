@@ -91,7 +91,7 @@ def test_transcribe_traz_opcao_da_movimentacao_bancaria(cliente, monkeypatch):
     lancamentos = cliente.post("/transcribe", headers=CABECALHO).json()["banco_0001"][0]["lancamentos"]
     extrato = cliente.post("/transcribe", headers=CABECALHO).json()["banco_0001"][0]
     assert (extrato["banco"], extrato["agencia"]) == ("001", "3404")
-    assert {(l["banco"], l["agencia"]) for l in lancamentos} == {("001", "3404")}
+    assert {(l["banco"], l["agencia"], l["conta"]) for l in lancamentos} == {("001", "3404", "41000-4")}
     assert [(l["operacao"], l["opcao"], l["descricao_opcao"]) for l in lancamentos] == [
         ("debito", 3, "Movimentação Bancária a Pagar (saída)"),
         ("credito", 4, "Movimentação Bancária a Receber (entrada)")]
@@ -99,7 +99,7 @@ def test_transcribe_traz_opcao_da_movimentacao_bancaria(cliente, monkeypatch):
 
 
 def test_extratos_do_robo_nao_mudam(cliente, monkeypatch):
-    """/extratos (usada pelo robô) continua sem banco/agencia/opcao/descricao_opcao."""
+    """/extratos (usada pelo robô) continua sem banco/agencia/conta/opcao/descricao_opcao nos lançamentos."""
     from routers import extratos_router
     monkeypatch.setattr(extratos_router, "transcrever_uploads", lambda pdfs: _extrato_de_teste())
     resposta = cliente.post("/extratos", headers=CABECALHO,
