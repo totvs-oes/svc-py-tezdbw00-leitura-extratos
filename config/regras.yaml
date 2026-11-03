@@ -1,0 +1,226 @@
+# Regras de classificação dos lançamentos do extrato.
+#
+# O histórico é normalizado antes da comparação: MAIÚSCULO, sem acento, espaços simples.
+# As regras são avaliadas NA ORDEM; vale a primeira que casar.
+# Lançamento que não casa com nenhuma regra = "nao_reconhecido" -> pendência (nunca é lançado).
+#
+# Campos de cada regra:
+#   nome          identificador (aparece no relatório)
+#   categoria     transferencia | contrapartida | consolidacao | tarifa | tarifa_agrupada | rendimento | fora_do_escopo
+#                 | acao_manual (não lança; vira pendência com o motivo/acao da regra)
+#   historico     regex (re.search) sobre o histórico normalizado, ou lista de regex (qualquer uma)
+#   operacao      debito | credito (opcional = qualquer)
+#   tipos_conta   tipos da conta do extrato (opcional = qualquer)
+#   bancos        códigos COMPE (opcional = qualquer)
+#   contas        chaves de conta de config/contas.yaml (opcional = qualquer)
+#   destino_tipo  (transferencia) tipo da conta destino no MESMO banco; a conta do extrato é a origem
+#   origem_tipo   (transferencia) tipo da conta origem no MESMO banco; a conta do extrato é o destino
+#   origem_conta  (consolidacao) chave da conta de origem
+#   motivo/acao   (acao_manual) textos da pendência no relatório
+#   natureza      (tarifa) natureza própria no Protheus; sem ela vale constantes.natureza_tarifa
+#   historico_protheus  modelo do histórico gravado no Protheus (máx. 40 caracteres)
+#                       {so}/{sd} = sigla do banco origem/destino, {to}/{td} = tipo abreviado
+
+constantes:
+  filial: "010101"
+  natureza_transferencia: "2001037"
+  natureza_tarifa: "2009028"
+  natureza_rendimento: "1002002"
+  tipo_mov_transferencia: "TB"
+  numerario: "M1"
+  historico_rendimento: "REND APLIC"
+  beneficiario_transferencia: "AEROFLEX IND. DE AEROSOL LTDA"
+  beneficiario_rendimento: "AEROFLEX"
+  configuracao_conciliacao: "0024"
+  historico_transferencia: "TRANSF {so} {to} P/ {sd} {td}"
+  # PIX ou TED entre contas correntes da própria Aeroflex (cliente, 20 e 21/10/2026): vira transferência quando o
+  # DÉBITO de PIX/TED numa conta tem, no mesmo dia, um CRÉDITO de mesmo valor em outra conta corrente da Aeroflex
+  # vindo da própria Aeroflex. Débito ou crédito que diz ser da Aeroflex e fica sem par -> pendência; PIX/TED comum
+  # (terceiros) continua fora do escopo.
+  pix_mesma_titularidade:
+    # PIX ENVIADO / PAGAMENTO PIX / PAGFOR PIX OUTRA INST / ENVIO DE TED — nunca a tarifa ("TARIFA TED GUICHE CAIXA")
+    debito: '^(?!.*\bTAR(IFA)?\b).*\b(PIX|TED)\b'
+    credito: '\b(PIX|TED)\b.*\bRECEB'                   # PIX RECEBIDO / Pix - Recebido / TED RECEBIDA
+    # "DES: AEROFLEX", "PIX RECEBIDO AEROFLE", "MESMA T IT", "TED RECEBIDA 104.4266.AEROFLEX", CNPJ 07.872.967
+    da_aeroflex: '\bAEROFLE|\bMESMA T\s*I\s*T|07872967'
+    historico: "TRANSF {so} C/C P/ {sd} C/C"
+  abreviacao_tipo:
+    corrente: "C/C"
+    caucao: "CAU"
+    vinculada: "VINC"
+    aplicacao: "APLIC"
+    cambio: "CAMBIO"
+    auxiliar: "AUX"
+
+regras:
+  # --- Santander caução central 29000181 (cliente, 21/10/2026): no Protheus recebe todos os recebimentos e é a ORIGEM
+  # das transferências para as cauções 29000371/376/432 (regra consolidacao_santander, calculada pelos extratos delas);
+  # no banco ela não movimenta. Se o extrato dela vier na pasta, NENHUMA linha é lançada (nem liberação para a C/C) e
+  # a conta não é conciliada (contas.yaml). Primeira regra: vale antes de qualquer outra.
+  - nome: cobranca_caucao_central_santander
+    categoria: fora_do_escopo
+    contas: [santander_caucao_central]
+    historico: '.'
+
+  # --- Santander: créditos de cobrança nas cauções -> base da transferência 29000181 -> caução (só no Protheus)
+  - nome: consolidacao_santander
+    categoria: consolidacao
+    bancos: ["033"]
+    tipos_conta: [caucao]
+    operacao: credito
+    historico: '^COBRANCA GARANTIA\b'
+    origem_conta: santander_caucao_central
+    historico_protheus: "TRANSF {so} CAU P/ {sd} CAU"
+
+  # --- Liberação de caução / vinculada -> conta corrente. O lado DÉBITO (caução) é o dono.
+  - nome: liberacao_caucao
+    categoria: transferencia
+    operacao: debito
+    tipos_conta: [caucao, vinculada]
+    historico: '\bTEG\b|TRANSF\.? ?EXCEDENTE|LIBERACAO DE (CONTA )?VINCULADA|SALDO VINCULADO LIBERADO|TRANSFERENCIA ENTRE C/?C|^TRANSF\b'
+    destino_tipo: corrente
+
+  # Mesmo movimento visto pela conta corrente (crédito): não lança, só confere o par.
+  - nome: contrapartida_liberacao
+    categoria: contrapartida
+    operacao: credito
+    tipos_conta: [corrente]
+    # Caixa: a vinculada transfere como "TRANSF RECURSO AGENCIA" e o crédito chega na C/C como "CRED TEV" (10/09/2026)
+    # ou "CREDITO TRANSF AGENCIA ... AEROFLEX" (extrato novo da Caixa, out/2026)
+    historico: '\bTEG\b|TRANSF\.? ?EXCEDENTE|LIBERACAO DE (CONTA )?VINCULADA|MESMA TITULARI|TRANSFERENCIA ENTRE C/?C|^CRED TEV\b|^CREDITO TRANSF AGENCIA\b'
+    origem_tipo: [caucao, vinculada]
+
+  # --- Itaú "KG": pagamento ligado ao Contas a Pagar; a baixa é manual (cliente, 05/10/2026). Não lançar.
+  # --- Daycoval "AMORT. DE CONTRATO": amortização de empréstimo do Contas a Pagar; baixa manual (cliente, 05/10/2026)
+  # --- BB "Cap Giro Dig Amortização" (15/09/2026): amortização de capital de giro, mesmo tratamento. Cliente,
+  # 14/10/2026: TODA amortização de capital de giro do BB é manual (qualquer variação do texto).
+  - nome: amortizacao_contrato
+    categoria: acao_manual
+    bancos: ["707", "001"]
+    operacao: debito
+    historico: '^AMORT\.? DE CONTRATO\b|\bCAP(ITAL)?( DE)? GIRO\b.*\bAMORTIZ|\bAMORT(\.|IZACAO)?( DE)? CAP(ITAL)?( DE)? GIRO\b'
+    motivo: "Amortização de contrato (empréstimo) do Contas a Pagar (não é lançada pelo robô)."
+    acao: "Fazer a baixa manual do título no Contas a Pagar; sem ela o saldo da conta não fecha na conciliação."
+
+  - nome: kg_contas_a_pagar
+    categoria: acao_manual
+    bancos: ["341"]
+    operacao: debito
+    historico: '^KG\b'
+    motivo: "Pagamento KG do Contas a Pagar (não é lançado pelo robô)."
+    acao: "Fazer a baixa manual do título no Contas a Pagar; sem ela o saldo da conta não fecha na conciliação."
+
+  # --- Contas de consumo e seguros debitados no banco: baixa manual no Contas a Pagar (cliente, 09/10/2026).
+  - nome: contas_a_pagar_manual
+    categoria: acao_manual
+    operacao: debito
+    historico: '\bCONTA DE LUZ\b|\bMENSALIDADE DE SEGURO\b'   # Bradesco "CONTA DE LUZ CELESC"; Santander seguro de vida
+    motivo: "Pagamento do Contas a Pagar debitado no banco (conta de consumo / seguro): não é lançado pelo robô."
+    acao: "Fazer a baixa manual do título no Contas a Pagar; sem ela o saldo da conta não fecha na conciliação."
+
+  # --- Itaú: aplicação automática ("APL APLIC AUT MAIS" / "RES APLIC AUT MAIS AP") não é lançada (cliente,
+  # 15-19/10/2026): não altera o saldo da conta, que é conciliado pelo "SALDO TOTAL DISPONÍVEL DIA" (conta +
+  # aplicação automática). Antes das regras de aplicação/resgate, que pegariam esses históricos.
+  - nome: aplicacao_automatica_itau
+    categoria: fora_do_escopo
+    bancos: ["341"]
+    historico: '^(RES |APL )?APLIC AUT MAIS\b'   # o rendimento "REND PAGO APLIC AUT MAIS" continua rendimento
+
+  # --- Aplicações financeiras (CC <-> conta aplicação)
+  - nome: resgate_aplicacao
+    categoria: transferencia
+    operacao: credito
+    tipos_conta: [corrente]
+    # ABC "EST. LCTO. OP. RENDA FIXA": saída da aplicação para a conta corrente (cliente, 09/10/2026)
+    historico: '\bRESGATE\b|^RES APLIC\b|^EST\.? LCTO\.? OP\.? RENDA FIXA\b'
+    origem_tipo: aplicacao
+    historico_protheus: "TRANSF {so} RESGATE APLIC P/ {sd} CC"
+
+  - nome: aplicacao
+    categoria: transferencia
+    operacao: debito
+    tipos_conta: [corrente]
+    historico: '^APLICACAO\b|^APLIC AUT\b|^APL APLIC AUT\b|\bAPLIC(ACAO)? (CDB|FINANCEIRA|CONTAMAX)'   # Itaú "APL APLIC AUT MAIS" (10/09)
+    destino_tipo: aplicacao
+    historico_protheus: "TRANSF {so} CC P/ {sd} APLIC"
+
+  # --- Rendimento (sempre crédito em conta corrente)
+  - nome: rendimento
+    categoria: rendimento
+    operacao: credito
+    tipos_conta: [corrente]
+    historico: '\bREND(E|IMENTO|IMENTOS)?\b'
+
+  # --- Tarifas agrupadas: o valor NÃO é lançado; usa o extrato de tarifas detalhado.
+  - nome: tarifa_agrupada_bb
+    categoria: tarifa_agrupada
+    bancos: ["001"]
+    operacao: debito
+    historico: 'TAR\.? AGRUPADAS'
+  # Itaú "TAR/CUSTAS COBRANCA": agrupamento das tarifas de cobrança. A cliente confirmou (05/10/2026, 2ª resposta)
+  # abrir pelo relatório de tarifas do Itaú ("TARIFAS ITAU", Movimentação de Títulos), como no BB. Sem detalhe que
+  # some exatamente o valor da linha -> pendência (nunca lança o agrupado).
+  - nome: tarifa_agrupada_itau
+    categoria: tarifa_agrupada
+    bancos: ["341"]
+    operacao: debito
+    historico: '^TAR/CUSTAS\b'
+
+  # --- Bradesco "DOC/TED INTERNET": tarifa de TED (cliente, 09/10/2026). Só no Bradesco: em outro banco o mesmo
+  # texto pode ser a própria transferência.
+  - nome: tarifa_ted_bradesco
+    categoria: tarifa
+    bancos: ["237"]
+    operacao: debito
+    historico: '^DOC/TED INTERNET\b'
+
+  # --- BB tarifa de câmbio ("Tar Liquid Orpag Exterior", 22/10/2026): natureza CUSTOS COM IMPORTAÇÃO, não a de
+  # tarifas bancárias (cliente, 23/10/2026). "Débito Serv.Cambio" (sem "TAR") continua na regra cambio_bb.
+  - nome: tarifa_cambio_bb
+    categoria: tarifa
+    operacao: debito
+    bancos: ["001"]
+    historico: '\bTAR(IFA)?\b.*\b(ORPAG|CAMBIO|EXTERIOR)\b'
+    natureza: "2001054"
+
+  # --- Tarifas individuais
+  - nome: tarifa
+    categoria: tarifa
+    operacao: debito
+    # Caixa: o código vem grudado ("COB ALT055", "COBPROT066"), por isso sem \b no fim desses dois.
+    # Cliente, 09/10/2026: ABC "DESPESA REGISTRO RECEBIVEIS" e Itaú "SISDEB REDECARD" são tarifas.
+    # 14/10/2026: Bradesco "DESPESAS DE PROTESTO 2003179" é tarifa (era pendência em 13/10).
+    historico: '\bTAR\b|\bTARIFA|\bCOB (LOTERI|AGENC|COMPE|ALT|BX|MAN|INTERN)|\bCOBPROT|DESPESAS? DE CARTORIO|DESPESAS DE PROTESTO|DEBITO SERVICO COBRANCA|DEB\.? CUSTAS CARTOR|\bPACOTE PJ\b|\bDESPESA REGISTRO RECEBIVEIS\b|^SISDEB REDECARD\b'
+
+  # --- Caixa: todo DÉBITO que começa com "COB" é tarifa de cobrança, qualquer que seja o código grudado
+  # (cliente, 15/10/2026; "COB EST137" de 08/10 não estava na lista acima). Os CRÉDITOS "COB ..." da vinculada
+  # continuam fora do escopo.
+  - nome: tarifa_cobranca_caixa
+    categoria: tarifa
+    bancos: ["104"]
+    operacao: debito
+    historico: '^COB'
+
+  # --- BB câmbio de exportação (contrato, câmbio, serviço de câmbio, IOF): baixa manual no Contas a Pagar (cliente,
+  # 09/10/2026). Depois da regra de tarifa: "Tar Liquid Orpag Exterior" continua tarifa.
+  - nome: cambio_bb
+    categoria: acao_manual
+    bancos: ["001"]
+    historico: '\bCAMBIO\b'
+    motivo: "Operação de câmbio (contrato de exportação, IOF ou serviço de câmbio): não é lançada pelo robô."
+    acao: "Fazer a baixa manual no Contas a Pagar."
+
+  # --- Fora do escopo do RPA (recebimentos, pagamentos, CNAB, impostos...). Só informativo.
+  - nome: fora_do_escopo
+    categoria: fora_do_escopo
+    historico:   # lista = qualquer uma das expressões
+      - '^COBRANCA$'
+      - 'LIQUIDACAO DE COBRANCA|LIQUIDO DE COBRANCA|CR COB COMPENSACAO|RECEBIMENTO DE COBRANCA|CREDITO COBRANCA'
+      - 'BOLETO RECEBIDO|^RECEBIMENTOS$'
+      - '\bPIX (RECEBIDO|ENVIADO|QR CODE)|PIX RECEBIDO|^PIX - ENVIADO|PAGAMENTO PIX'
+      - '^PAGAMENTOS\b|^SISPAG\b|^TED\b|TED ENVIADA|^PAGFOR\b'
+      - '^DEV PAG BOL\b'   # Itaú: estorno de pagamento recusado pelo banco; sem ação (cliente, 05/10/2026)
+      - '^DEVOLUCAO DE TED\b'   # Safra: pagamento estornado pelo banco; sem ação (cliente, 09/10/2026)
+      - '^IMPOSTOS\b|^CONTR IMP\b|PRESTACAO CONSORCIO|DEBITO AUT(\.|OMATICO\b)'
+      - '^PAGAMENTO DE BOLETO\b|PAGAMENTO DE SALARIO|^ENVIO TED\b'   # pagamentos (10/09/2026)
+      - '^COB (INTERN|COMPE|LOT|AGENC|AGN)'   # Caixa vinculada ("COB AGN DH", 19/10/2026): créditos de cobrança (os débitos já caíram em tarifa)

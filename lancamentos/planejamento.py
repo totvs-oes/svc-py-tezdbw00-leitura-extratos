@@ -1,0 +1,417 @@
+"""Planejamento: extratos lidos -> Plano do que lançar e conciliar no Protheus.
+
+Módulo puro (sem I/O): toda regra de negócio fica aqui e é coberta por testes.
+"""
+from __future__ import annotations
+
+import hashlib
+import re
+from collections import Counter, defaultdict
+from datetime import date, datetime
+from decimal import Decimal
+from itertools import combinations
+from typing import Iterable, Optional
+
+from lancamentos.classificacao import classificar
+from lancamentos.cadastro import Cadastro
+from lancamentos.modelos import (Categoria, Classificacao, Conciliacao, Conta, ExtratoLido,
+                                 LancamentoExtrato, Pendencia, Plano, Rendimento, Rotina, Tarifa,
+                                 Transferencia, formatar_brl)
+from lancamentos.pastas import dia_util_seguinte
+from lancamentos.texto import normalizar
+
+TAMANHO_HISTORICO = 40  # E5_HISTOR
+RE_OCORRENCIA = re.compile(r"OCORRENCIA (\d{2}/\d{2}/\d{4})")
+
+
+def planejar(extratos: list[ExtratoLido], cadastro: Cadastro, data_movimento: date,
+             feriados: Iterable[date] = ()) -> Plano:
+    plano = Plano(data_movimento=data_movimento, extratos=extratos)
+    planejador = _Planejador(cadastro, plano, dia_util_seguinte(data_movimento, feriados))
+    planejador.executar()
+    _atribuir_chaves(plano)
+    return plano
+
+
+class _Planejador:
+    def __init__(self, cadastro: Cadastro, plano: Plano, proximo_dia_util: date):
+        self.cadastro = cadastro
+        self.plano = plano
+        self.dia = plano.data_movimento
+        self.proximo_dia_util = proximo_dia_util
+        self.contrapartidas: list[tuple[LancamentoExtrato, Classificacao]] = []
+        self.consolidacoes: dict[tuple[str, str], list[LancamentoExtrato]] = defaultdict(list)
+        self.agrupadas: list[LancamentoExtrato] = []
+        self.transferencias_do_extrato: list[Transferencia] = []
+        # Transferências lançadas a partir do DÉBITO (caução/vinculada): o crédito deve aparecer no destino
+        self.saidas_de_caucao: list[Transferencia] = []
+
+    # ------------------------------------------------------------------
+    def executar(self) -> None:
+        normais = [e for e in self.plano.extratos if not e.eh_detalhe_tarifas]
+        utilizaveis = [e for e in normais if self._extrato_utilizavel(e)]
+        pareados = self._pix_entre_contas(utilizaveis)
+        for extrato in utilizaveis:
+            for lancamento in extrato.lancamentos:
+                if lancamento.data == self.dia and (lancamento.arquivo, lancamento.indice) not in pareados:
+                    self._tratar(lancamento)
+            self._planejar_conciliacao(extrato)
+
+        self.plano.transferencias = self._consolidacoes_santander() + self.transferencias_do_extrato
+        self._parear_contrapartidas()
+        self._detalhar_tarifas_agrupadas()
+
+    def _pendencia(self, arquivo: str, motivo: str, acao: str, lancamento: Optional[LancamentoExtrato] = None,
+                   conta: Optional[Conta] = None) -> None:
+        self.plano.pendencias.append(Pendencia(
+            arquivo=arquivo, motivo=motivo, acao=acao,
+            data=lancamento.data if lancamento else None,
+            historico=lancamento.historico if lancamento else None,
+            valor=lancamento.valor if lancamento else None,
+            conta=lancamento.conta if lancamento else conta,
+        ))
+
+    def _extrato_utilizavel(self, extrato: ExtratoLido) -> bool:
+        if extrato.conta is None:
+            self._pendencia(extrato.arquivo, "Arquivo não corresponde a nenhuma conta de config/contas.yaml.",
+                            "Conferir o nome do arquivo ou cadastrar a conta em config/contas.yaml.")
+            return False
+        if extrato.metodo == "nenhum":
+            self._pendencia(extrato.arquivo, f"A API não conseguiu ler o extrato: {extrato.aviso or 'sem detalhe'}.",
+                            "Lançar manualmente ou reenviar um PDF com texto.", conta=extrato.conta)
+            return False
+        if extrato.conferencia_ok is False:
+            self._pendencia(extrato.arquivo,
+                            "Conferência do extrato falhou (saldo anterior + lançamentos ≠ saldo final). "
+                            "Nenhum lançamento desta conta foi planejado.",
+                            "Verificar a leitura do PDF na API e lançar manualmente se necessário.",
+                            conta=extrato.conta)
+            return False
+        if extrato.aviso:
+            self._pendencia(extrato.arquivo, f"Aviso da leitura: {extrato.aviso}", "Conferir o extrato.",
+                            conta=extrato.conta)
+        return True
+
+    # ------------------------------------------------------------------
+    def _pix_entre_contas(self, extratos: list[ExtratoLido]) -> set[tuple[str, int]]:
+        """PIX entre contas correntes da Aeroflex (cliente, 20/10/2026: Bradesco "PIX ENVIADO DES: AEROFLEX", Santander
+        "PAGFOR PIX OUTRA INST- MESMA TIT", ABC "PAGAMENTO PIX" -> Itaú "PIX RECEBIDO AEROFLE"). O destino só é
+        conhecido pelo crédito: débito de PIX + crédito de PIX da Aeroflex, mesmo valor, outra conta corrente = uma
+        transferência. Devolve os lançamentos usados (não passam pelas regras). Lado "da Aeroflex" sem par -> pendência."""
+        config = self.cadastro.constantes.get("pix_mesma_titularidade")
+        if not config:
+            return set()
+        debito, credito, aeroflex = (re.compile(config[k]) for k in ("debito", "credito", "da_aeroflex"))
+        do_dia = [l for e in extratos if e.conta and e.conta.tipo.value == "corrente"
+                  for l in e.lancamentos if l.data == self.dia]
+        saidas = [l for l in do_dia if l.operacao == "debito" and debito.search(normalizar(l.historico))
+                  and not credito.search(normalizar(l.historico))]
+        entradas = [l for l in do_dia if l.operacao == "credito" and credito.search(normalizar(l.historico))
+                    and aeroflex.search(normalizar(l.historico))]
+        usados: set[tuple[str, int]] = set()
+        # primeiro os débitos que dizem ser para a Aeroflex, depois os genéricos ("PAGAMENTO PIX")
+        for saida in sorted(saidas, key=lambda l: not aeroflex.search(normalizar(l.historico))):
+            par = next((e for e in entradas if e.valor == saida.valor and e.conta != saida.conta
+                        and (e.arquivo, e.indice) not in usados), None)
+            if par is None:
+                continue
+            usados |= {(saida.arquivo, saida.indice), (par.arquivo, par.indice)}
+            self.transferencias_do_extrato.append(Transferencia(
+                rotina=Rotina.TRANSFERENCIA, data=self.dia, valor=saida.valor, origem=saida.conta, destino=par.conta,
+                historico=self._historico_transferencia(config.get("historico"), saida.conta, par.conta),
+                origem_extrato=f"{saida.arquivo}#{saida.indice}",
+            ))
+        for lancamento in saidas + entradas:
+            if (lancamento.arquivo, lancamento.indice) in usados or not aeroflex.search(normalizar(lancamento.historico)):
+                continue
+            usados.add((lancamento.arquivo, lancamento.indice))
+            self._pendencia(lancamento.arquivo,
+                            "PIX entre contas da Aeroflex sem o lançamento correspondente (mesmo valor) na outra conta "
+                            "corrente: a transferência não foi lançada.",
+                            "Conferir o extrato da outra conta e lançar a transferência manualmente.", lancamento)
+        return usados
+
+    def _tratar(self, lancamento: LancamentoExtrato) -> None:
+        classificacao = classificar(lancamento, self.cadastro.regras)
+        categoria = classificacao.categoria
+        if categoria == Categoria.TRANSFERENCIA:
+            self._transferencia(lancamento, classificacao)
+        elif categoria == Categoria.CONTRAPARTIDA:
+            self.contrapartidas.append((lancamento, classificacao))
+        elif categoria == Categoria.CONSOLIDACAO:
+            self.consolidacoes[(lancamento.conta.chave, classificacao.origem_conta)].append(lancamento)
+        elif categoria == Categoria.TARIFA:
+            tarifa = self._tarifa(lancamento, lancamento.historico, f"{lancamento.arquivo}#{lancamento.indice}")
+            tarifa.natureza = classificacao.natureza
+            self.plano.tarifas.append(tarifa)
+        elif categoria == Categoria.TARIFA_AGRUPADA:
+            self.agrupadas.append(lancamento)
+        elif categoria == Categoria.RENDIMENTO:
+            self.plano.rendimentos.append(Rendimento(
+                rotina=Rotina.RENDIMENTO, data=self.dia, valor=lancamento.valor, conta=lancamento.conta,
+                historico=self.cadastro.constantes["historico_rendimento"],
+                origem_extrato=f"{lancamento.arquivo}#{lancamento.indice}",
+            ))
+        elif categoria == Categoria.FORA_DO_ESCOPO:
+            self.plano.fora_do_escopo.append(lancamento)
+        elif categoria == Categoria.ACAO_MANUAL:
+            self._pendencia(lancamento.arquivo, classificacao.motivo or f"Regra {classificacao.regra}.",
+                            classificacao.acao or "Tratar manualmente.", lancamento)
+        else:
+            self._pendencia(lancamento.arquivo, "Lançamento não reconhecido por nenhuma regra.",
+                            "Lançar manualmente ou criar regra em config/regras.yaml.", lancamento)
+
+    def _tarifa(self, lancamento: LancamentoExtrato, historico: str, origem: str) -> Tarifa:
+        return Tarifa(rotina=Rotina.TARIFA, data=self.dia, valor=lancamento.valor, conta=lancamento.conta,
+                      historico=normalizar(historico)[:TAMANHO_HISTORICO], origem_extrato=origem)
+
+    def _conta_unica(self, banco: str, tipos: tuple[str, ...] | str) -> Optional[Conta]:
+        tipos = (tipos,) if isinstance(tipos, str) else tipos
+        candidatas = [c for tipo in tipos for c in self.cadastro.contas_do_banco(banco, tipo)]
+        return candidatas[0] if len(candidatas) == 1 else None
+
+    def _historico_transferencia(self, modelo: Optional[str], origem: Conta, destino: Conta) -> str:
+        abreviacao = self.cadastro.constantes["abreviacao_tipo"]
+        texto = (modelo or self.cadastro.constantes["historico_transferencia"]).format(
+            so=self.cadastro.bancos[origem.banco].sigla, to=abreviacao[origem.tipo.value],
+            sd=self.cadastro.bancos[destino.banco].sigla, td=abreviacao[destino.tipo.value],
+        )
+        return texto[:TAMANHO_HISTORICO]
+
+    def _transferencia(self, lancamento: LancamentoExtrato, classificacao: Classificacao) -> None:
+        conta = lancamento.conta
+        if classificacao.destino_tipo:
+            origem, destino = conta, self._conta_unica(conta.banco, classificacao.destino_tipo)
+            falta = classificacao.destino_tipo
+        else:
+            origem, destino = self._conta_unica(conta.banco, classificacao.origem_tipo), conta
+            falta = "/".join(classificacao.origem_tipo or ())
+        if origem is None or destino is None:
+            self._pendencia(lancamento.arquivo,
+                            f"Transferência ({classificacao.regra}): não há exatamente uma conta '{falta}' "
+                            f"do banco {conta.banco} em config/contas.yaml.",
+                            "Ajustar o cadastro de contas ou lançar manualmente.", lancamento)
+            return
+        transferencia = Transferencia(
+            rotina=Rotina.TRANSFERENCIA, data=self.dia, valor=lancamento.valor, origem=origem, destino=destino,
+            historico=self._historico_transferencia(classificacao.historico_protheus, origem, destino),
+            origem_extrato=f"{lancamento.arquivo}#{lancamento.indice}",
+        )
+        self.transferencias_do_extrato.append(transferencia)
+        if classificacao.destino_tipo == "corrente":
+            self.saidas_de_caucao.append(transferencia)
+
+    # ------------------------------------------------------------------
+    def _consolidacoes_santander(self) -> list[Transferencia]:
+        """Santander: no Protheus tudo entra na caução central; ela é redistribuída para as cauções do extrato."""
+        resultado = []
+        modelos = {r.nome: r for r in self.cadastro.regras}
+        for (chave_destino, chave_origem), lancamentos in self.consolidacoes.items():
+            destino, origem = self.cadastro.conta(chave_destino), self.cadastro.conta(chave_origem)
+            regra = modelos.get("consolidacao_santander")
+            resultado.append(Transferencia(
+                rotina=Rotina.TRANSFERENCIA, data=self.dia, valor=sum((l.valor for l in lancamentos), Decimal("0")),
+                origem=origem, destino=destino,
+                historico=self._historico_transferencia(regra.historico_protheus if regra else None, origem, destino),
+                origem_extrato=f"{lancamentos[0].arquivo}#consolidacao({len(lancamentos)} créditos)",
+            ))
+        return resultado
+
+    def _parear_contrapartidas(self) -> None:
+        """Cada crédito de contrapartida precisa de uma transferência planejada com mesmo destino, data e valor."""
+        livres = list(self.transferencias_do_extrato)
+        for lancamento, classificacao in self.contrapartidas:
+            par = next((t for t in livres
+                        if t.destino == lancamento.conta and t.valor == lancamento.valor
+                        and t.origem.tipo.value in (classificacao.origem_tipo or ())), None)
+            if par:
+                livres.remove(par)
+            else:
+                self._pendencia(lancamento.arquivo,
+                                "Crédito de transferência sem o débito correspondente nos extratos de origem "
+                                "(extrato da caução/vinculada ausente ou valor divergente).",
+                                "Conferir o extrato da conta de origem; lançar a transferência manualmente se for o caso.",
+                                lancamento)
+
+        contas_com_extrato = {e.conta for e in self.plano.extratos if e.conta and not e.eh_detalhe_tarifas}
+        for transferencia in livres:
+            if transferencia in self.saidas_de_caucao and transferencia.destino in contas_com_extrato:
+                transferencia.aviso = "Crédito correspondente não encontrado no extrato da conta destino."
+
+    def _detalhar_tarifas_agrupadas(self) -> None:
+        """Tarifa agrupada: lança as tarifas do extrato detalhado, se a soma bater com o agrupado."""
+        por_ocorrencia: dict[tuple[str, date], list[LancamentoExtrato]] = defaultdict(list)
+        for lancamento in self.agrupadas:
+            match = RE_OCORRENCIA.search(normalizar(lancamento.historico))
+            ocorrencia = datetime.strptime(match.group(1), "%d/%m/%Y").date() if match else lancamento.data
+            por_ocorrencia[(lancamento.conta.banco, ocorrencia)].append(lancamento)
+
+        detalhes = [e for e in self.plano.extratos if e.eh_detalhe_tarifas]
+        for (banco, ocorrencia), agrupadas in por_ocorrencia.items():
+            relatorios = [(e.arquivo, [l for l in e.lancamentos if l.data == ocorrencia and l.operacao == "debito"])
+                          for e in detalhes if e.banco == banco]
+            relatorios = [(arquivo, itens) for arquivo, itens in relatorios if itens]
+            total_agrupado = sum((l.valor for l in agrupadas), Decimal("0"))
+            total_detalhe = sum((l.valor for _, itens in relatorios for l in itens), Decimal("0"))
+
+            # Todos os relatórios do dia somam todas as linhas agrupadas (BB: "I" + "II" = uma linha)
+            if relatorios and total_detalhe == total_agrupado:
+                for _, itens in relatorios:
+                    self._lancar_detalhe(itens, agrupadas[0].conta)
+                continue
+
+            # Relatório antigo esquecido na pasta junto com o novo (BB 21/10/2026: "I" e "II" da manhã + "III" e "IV"
+            # salvos às 14:32): se UM único conjunto de relatórios inteiros soma o agrupado, lança esse e avisa.
+            if (escolhidos := _unico_subconjunto_que_soma(relatorios, total_agrupado)) is not None:
+                ignorados = ", ".join(a for a, _ in relatorios if a not in {e for e, _ in escolhidos})
+                for _, itens in escolhidos:
+                    self._lancar_detalhe(itens, agrupadas[0].conta,
+                                         aviso=f"Ignorado(s) por não fechar com o agrupado: {ignorados}.")
+                continue
+
+            # Senão, cada relatório que soma exatamente UMA linha agrupada lança só ela (Itaú: um relatório
+            # "Movimentação de Títulos" por carteira, uma linha TAR/CUSTAS por relatório). O resto vira pendência.
+            restantes = list(agrupadas)
+            sobras: list[tuple[str, list[LancamentoExtrato]]] = []
+            for arquivo, itens in relatorios:
+                soma = sum((l.valor for l in itens), Decimal("0"))
+                if (linha := next((a for a in restantes if a.valor == soma), None)) is not None:
+                    restantes.remove(linha)
+                    self._lancar_detalhe(itens, linha.conta)
+                else:
+                    sobras.append((arquivo, itens))
+
+            total_sobras = sum((l.valor for _, itens in sobras for l in itens), Decimal("0"))
+            por_relatorio = "; ".join(f"{a}: R$ {formatar_brl(sum((l.valor for l in itens), Decimal('0')))}"
+                                      for a, itens in sobras)
+            for lancamento in restantes:
+                motivo = ("Extrato de tarifas detalhado não encontrado para a ocorrência."
+                          if not sobras else
+                          f"Soma do detalhamento (R$ {formatar_brl(total_sobras)}) diferente do agrupado "
+                          f"(R$ {formatar_brl(lancamento.valor)}). Por relatório: {por_relatorio}.")
+                self._pendencia(lancamento.arquivo, f"Tarifa agrupada de {ocorrencia:%d/%m/%Y}: {motivo}",
+                                "Lançar as tarifas individualmente a partir do extrato de tarifas.", lancamento)
+
+    def _lancar_detalhe(self, itens: list[LancamentoExtrato], conta_debito: Conta,
+                        aviso: Optional[str] = None) -> None:
+        for item in itens:
+            tarifa = self._tarifa(item, item.historico, f"{item.arquivo}#{item.indice}")
+            tarifa.conta = conta_debito
+            tarifa.aviso = aviso
+            self.plano.tarifas.append(tarifa)
+
+    # ------------------------------------------------------------------
+    def _planejar_conciliacao(self, extrato: ExtratoLido) -> None:
+        conta = extrato.conta
+        if not conta.conciliar:
+            return
+        if conta.saldo_conciliacao:
+            self._conciliacao_sem_coluna_de_saldo(extrato)
+            return
+        if extrato.conferencia_ok is not True or extrato.saldo_anterior is None:
+            self._pendencia(extrato.arquivo, "Extrato sem saldo conferido: a conciliação automática não será feita.",
+                            "Conciliar manualmente no Conciliador Backoffice.", conta=conta)
+            return
+        # Se o extrato começa no dia útil seguinte, o saldo anterior dele É o saldo do fim do dia do movimento.
+        # Começando depois disso, pode ter havido movimento no meio que o arquivo não mostra.
+        datas = [l.data for l in extrato.lancamentos]
+        if datas and min(datas) > self.proximo_dia_util:
+            self._pendencia(extrato.arquivo,
+                            f"O extrato começa em {min(datas):%d/%m/%Y}, depois do dia útil seguinte ao movimento: "
+                            "não é possível calcular o saldo do dia.",
+                            "Conferir se o extrato correto está na pasta.", conta=conta)
+            return
+
+        saldo = extrato.saldo_anterior
+        for lancamento in extrato.lancamentos:
+            if lancamento.data <= self.dia:
+                saldo += lancamento.valor if lancamento.operacao == "credito" else -lancamento.valor
+        for data_ajuste, valor in extrato.ajustes:
+            if data_ajuste <= self.dia:
+                saldo += valor
+        self.plano.conciliacoes.append(Conciliacao(conta=conta, data=self.dia, saldo_extrato=saldo))
+
+    def _conciliacao_sem_coluna_de_saldo(self, extrato: ExtratoLido) -> None:
+        """Extrato sem saldo conferível (Safra), com a regra da cliente (14/10/2026) em `conta.saldo_conciliacao`:
+        "zero" = a conta fecha o dia zerada (os lançamentos do dia se anulam); senão, regex da linha de saldo que o
+        banco imprime na data do movimento ("SALDO CONTA CORRENTE"). Se o extrato também traz essa linha de um dia
+        anterior, ela + os lançamentos até o movimento tem que dar o saldo do dia (prova de que nada ficou sem ler)."""
+        conta = extrato.conta
+
+        def soma(lancamentos: Iterable[LancamentoExtrato]) -> Decimal:
+            return sum((l.valor if l.operacao == "credito" else -l.valor for l in lancamentos), Decimal("0"))
+
+        if conta.saldo_conciliacao == "zero":
+            movimento = soma(l for l in extrato.lancamentos if l.data == self.dia)
+            if movimento != 0:
+                self._pendencia(extrato.arquivo,
+                                f"A conta deve fechar o dia zerada, mas os lançamentos de {self.dia:%d/%m/%Y} somam "
+                                f"R$ {formatar_brl(movimento)}: a conciliação automática não será feita.",
+                                "Conferir o extrato e conciliar manualmente no Conciliador Backoffice.", conta=conta)
+                return
+            saldo = Decimal("0")
+        else:
+            linhas = [(d, v) for d, descricao, v in extrato.saldos_informados
+                      if re.search(conta.saldo_conciliacao, normalizar(descricao))]
+            do_dia = [v for d, v in linhas if d == self.dia]
+            if len(do_dia) != 1:
+                self._pendencia(extrato.arquivo,
+                                f"O extrato não traz uma linha de saldo '{conta.saldo_conciliacao}' de "
+                                f"{self.dia:%d/%m/%Y} ({len(do_dia)} encontradas): a conciliação automática não será feita.",
+                                "Conciliar manualmente no Conciliador Backoffice.", conta=conta)
+                return
+            saldo = do_dia[0]
+            if anteriores := [(d, v) for d, v in linhas if d < self.dia]:
+                data_anterior, saldo_anterior = max(anteriores)
+                corrido = saldo_anterior + soma(l for l in extrato.lancamentos if data_anterior < l.data <= self.dia)
+                if corrido != saldo:
+                    self._pendencia(extrato.arquivo,
+                                    f"Saldo de {data_anterior:%d/%m/%Y} (R$ {formatar_brl(saldo_anterior)}) + lançamentos "
+                                    f"= R$ {formatar_brl(corrido)}, diferente do saldo informado de {self.dia:%d/%m/%Y} "
+                                    f"(R$ {formatar_brl(saldo)}): pode haver lançamento não lido.",
+                                    "Verificar a leitura do PDF na API e conciliar manualmente.", conta=conta)
+                    return
+        self.plano.conciliacoes.append(Conciliacao(conta=conta, data=self.dia, saldo_extrato=saldo))
+
+
+# ----------------------------------------------------------------------
+MAX_RELATORIOS_COMBINADOS = 8
+
+
+def _unico_subconjunto_que_soma(relatorios: list[tuple[str, list[LancamentoExtrato]]],
+                                total: Decimal) -> Optional[list[tuple[str, list[LancamentoExtrato]]]]:
+    """Subconjunto próprio (não vazio) de relatórios inteiros cuja soma é `total`, se houver exatamente um."""
+    if not 1 < len(relatorios) <= MAX_RELATORIOS_COMBINADOS:
+        return None
+    somas = [sum((l.valor for l in itens), Decimal("0")) for _, itens in relatorios]
+    achados = [indices for tamanho in range(1, len(relatorios))
+               for indices in combinations(range(len(relatorios)), tamanho)
+               if sum((somas[i] for i in indices), Decimal("0")) == total]
+    return [relatorios[i] for i in achados[0]] if len(achados) == 1 else None
+
+
+def _atribuir_chaves(plano: Plano) -> None:
+    """Chave estável de idempotência: rotina + data + contas + valor + ordem de ocorrência.
+
+    Não depende do nome do arquivo (o ATUALIZADO substitui o original) NEM do texto do histórico: uma mudança na
+    leitura do PDF (nome do pagador a mais, nº do documento tirado do histórico, nosso número corrigido) gerava chave
+    nova e o lançamento era feito de novo (ocorrência 0002 do MIT045, 06-08/10/2026). Itens com a mesma base (ex.:
+    300 tarifas de R$ 0,89 na mesma conta) são equivalentes no Protheus: o robô conta quantos já lançou.
+
+    `chave_legada` (formato antigo, com o histórico) deixa o registro migrar o que já foi gravado.
+    """
+    ocorrencias: Counter[str] = Counter()
+    ocorrencias_legado: Counter[str] = Counter()
+    for item in plano.itens():
+        base = f"{item.rotina.value}|{item.data.isoformat()}|{item.contas()}|{item.valor}"
+        ocorrencias[base] += 1
+        item.chave = hashlib.sha1(f"v2|{base}|{ocorrencias[base]}".encode()).hexdigest()[:16]
+        legado = f"{base}|{item.historico}"
+        ocorrencias_legado[legado] += 1
+        item.chave_legada = hashlib.sha1(f"{legado}|{ocorrencias_legado[legado]}".encode()).hexdigest()[:16]
+
+
+def documento(data: date, sequencia: int) -> str:
+    """DDMMAA; a partir do segundo lançamento do mesmo tipo/banco/dia: DDMMAA1, DDMMAA2..."""
+    base = data.strftime("%d%m%y")
+    return base if sequencia == 0 else f"{base}{sequencia}"

@@ -1,0 +1,85 @@
+# Contas bancárias cadastradas no Protheus (SA6), informadas pela cliente em 13/08/2026.
+#
+# chave:    identificador interno (usado nas regras e no registro)
+# arquivo:  regex aplicada ao nome do PDF (maiúsculo, sem acento, espaços simples).
+#           Sem "arquivo" = conta que não tem extrato próprio (aplicação, caução central...).
+# conciliar: false para contas sem extrato ou que não passam pela Rotina 5.
+#
+# ⚠ Agência/conta precisam bater EXATAMENTE com o cadastro do Protheus — confirmar na lupa na calibração.
+
+bancos:
+  "001": {nome: BANCO DO BRASIL, sigla: BB, arquivo_tarifas: '^(EXTRATO DE )?TARIFAS (BB|BANCO DO BRASIL)\b'}
+  "033": {nome: SANTANDER, sigla: SANT, arquivo_tarifas: '^(EXTRATO DE )?TARIFAS SANTANDER\b'}
+  "104": {nome: CAIXA ECONOMICA, sigla: CEF, arquivo_tarifas: '^(EXTRATO DE )?TARIFAS (CAIXA|CEF)\b'}
+  "237": {nome: BRADESCO, sigla: BRAD, arquivo_tarifas: '^(EXTRATO DE )?TARIFAS BRADESCO\b'}
+  "246": {nome: ABC, sigla: ABC, arquivo_tarifas: '^(EXTRATO DE )?TARIFAS ABC\b'}
+  "341": {nome: ITAU, sigla: ITAU, arquivo_tarifas: '^(EXTRATO DE )?TARIFAS ITAU\b'}
+  "422": {nome: SAFRA, sigla: SAFRA, arquivo_tarifas: '^(EXTRATO DE )?TARIFAS SAFRA\b'}
+  "707": {nome: DAYCOVAL, sigla: DAYC, arquivo_tarifas: '^(EXTRATO DE )?TARIFAS DAYCOVAL\b'}
+  "634": {nome: TRIBANCO, sigla: TRIB, arquivo_tarifas: '^(EXTRATO DE )?TARIFAS TRIBANCO\b'}
+
+contas:
+  # --- Banco do Brasil
+  # Nome do arquivo varia: "41000-4", "410004", "41000.4" (14-09)
+  - {chave: bb_cc,        banco: "001", agencia: "3404",  numero: "41000",      tipo: corrente,  arquivo: '^BANCO DO BRASIL 41000[-.]?4\b'}
+  # "BANCO DO BRASIL APLIC.pdf" (desde 11-09): extrato do fundo RF LP Empresa, só informativo -> não concilia
+  - {chave: bb_aplic,     banco: "001", agencia: "3404",  numero: "9999999999", tipo: aplicacao, conciliar: false, arquivo: '^BANCO DO BRASIL APLIC\b'}
+
+  # --- Bradesco
+  - {chave: bradesco_cc,     banco: "237", agencia: "06349", numero: "0000050542", tipo: corrente, arquivo: '^BRADESCO 0*50542-?0\b'}
+  - {chave: bradesco_caucao, banco: "237", agencia: "6349",  numero: "3179",       tipo: caucao,   arquivo: '^BRADESCO 0*3179-?8\b'}
+  - {chave: bradesco_trianon, banco: "237", agencia: "0895", numero: "140419",     tipo: auxiliar}
+  # Agência 6349 (sem o zero), como no Protheus: "BANCO BRADESCO - APLICACAO" (cliente, 09/10/2026). Com 06349 o
+  # Protheus recusava as transferências com FA100BCO (ocorrência 0004 do MIT045).
+  - {chave: bradesco_aplic,  banco: "237", agencia: "6349",  numero: "9999999999", tipo: aplicacao}
+
+  # --- Santander
+  - {chave: santander_cc,             banco: "033", agencia: "04296", numero: "0013001842", tipo: corrente, arquivo: '^SANTANDER 0*13001842-?0\b'}
+  # Caução central 29000181-8: FORA da automação (cliente, 21/10/2026) — não é conciliada. O arquivo
+  # "SANTANDER 290001818 DD-MM.pdf" continua reconhecido só para não virar pendência se for salvo na pasta;
+  # os créditos dele são informativos (regra cobranca_caucao_central_santander).
+  - {chave: santander_caucao_central, banco: "033", agencia: "4296",  numero: "29000181",   tipo: caucao, arquivo: '^SANTANDER 0*29000181-?8\b',
+     conciliar: false}
+  - {chave: santander_caucao_371,     banco: "033", agencia: "4296",  numero: "29000371",   tipo: caucao, arquivo: '^SANTANDER 29000371-?\d\b'}
+  - {chave: santander_caucao_376,     banco: "033", agencia: "4296",  numero: "29000376",   tipo: caucao, arquivo: '^SANTANDER 29000376-?\d\b'}
+  - {chave: santander_caucao_432,     banco: "033", agencia: "4296",  numero: "29000432",   tipo: caucao, arquivo: '^SANTANDER 29000432-?\d\b'}
+  - {chave: santander_aplic,          banco: "033", agencia: "3731",  numero: "9999999999", tipo: aplicacao}
+
+  # --- ABC
+  - {chave: abc_cc,     banco: "246", agencia: "0001", numero: "006609345",  tipo: corrente, arquivo: '^ABC 0*6609345-?9\b'}
+  - {chave: abc_caucao, banco: "246", agencia: "0001", numero: "006609348",  tipo: caucao,   arquivo: '^ABC 0*6609348-?3\b'}
+  - {chave: abc_cambio, banco: "246", agencia: "0001", numero: "9999999",    tipo: cambio}
+  - {chave: abc_aplic,  banco: "246", agencia: "0001", numero: "9999999999", tipo: aplicacao}
+
+  # --- Safra
+  # O extrato do Safra não tem coluna de saldo (sem conferência). Cliente, 14/10/2026: a vinculada fica SEMPRE zerada
+  # e o saldo da C/C é a linha "SALDO CONTA CORRENTE" do dia (sem a aplicação automática).
+  - {chave: safra_cc,        banco: "422", agencia: "03800", numero: "580275",     tipo: corrente,  arquivo: '^SAFRA 0*580275-?7\b',
+     saldo_conciliacao: '^SALDO CONTA CORRENTE$'}
+  - {chave: safra_vinculada, banco: "422", agencia: "03800", numero: "326613",     tipo: vinculada, arquivo: '^SAFRA 0*326613-?1\b',
+     saldo_conciliacao: zero}
+  - {chave: safra_aplic,     banco: "422", agencia: "03800", numero: "9999999999", tipo: aplicacao}
+
+  # --- Itaú
+  # Cliente, 16/10/2026: a C/C concilia pelo "SALDO TOTAL DISPONÍVEL DIA" da data do movimento (conta + aplicação
+  # automática), não pelo "SALDO MOVIMENTAÇÃO CONTA" (R$ 1,00 depois da aplicação automática).
+  - {chave: itau_cc,     banco: "341", agencia: "4685", numero: "06896",      tipo: corrente, arquivo: '^ITAU 0*6896-?9\b',
+     saldo_conciliacao: '^SALDO TOTAL DISPONIVEL DIA$'}
+  - {chave: itau_caucao, banco: "341", agencia: "4685", numero: "83117",      tipo: caucao,   arquivo: '^ITAU 0*8311-?7\b'}
+  - {chave: itau_cambio, banco: "341", agencia: "4685", numero: "0000000000", tipo: cambio}
+  - {chave: itau_aplic,  banco: "341", agencia: "4685", numero: "9999999999", tipo: aplicacao}
+
+  # --- Caixa (o arquivo pode vir sem número de conta: "BANCO CAIXA 10-09.pdf", "BANCO CAIXA - 14-09.pdf")
+  - {chave: caixa_cc,        banco: "104", agencia: "4266", numero: "0005769805", tipo: corrente,  arquivo: '^(BANCO )?CAIXA( CC)?( 0*5769805-?\d+)?( -)?( \d{2}-\d{2})?\.PDF\b'}   # "CAIXA CC 15-10.pdf", "CAIXA CC.pdf" (19/10/2026)
+  # "CAIXA VINCULADA.pdf" (11-09); no PDF a conta é 4266/1292/000572845528-6 -> conferir o número no Protheus
+  - {chave: caixa_vinculada, banco: "104", agencia: "4266", numero: "57845528",   tipo: vinculada, arquivo: '^(BANCO )?CAIXA (0*57845528|VINCULADA)'}
+  - {chave: caixa_aplic,     banco: "104", agencia: "4266", numero: "9999999999", tipo: aplicacao}
+
+  # --- Daycoval: números como estão no Cadastro de Bancos do Protheus (print da cliente, 05/10/2026).
+  #   O cadastro tem também 0001/000610660 "BANCO DAYCOVAL LIMITE" (sem extrato no processo; não usada).
+  - {chave: daycoval_cc,     banco: "707", agencia: "0001", numero: "1500926",   tipo: corrente, arquivo: '^DAYCOVAL 0*1500926-?4\b'}
+  - {chave: daycoval_caucao, banco: "707", agencia: "0001", numero: "000866622", tipo: caucao,   arquivo: '^DAYCOVAL 0*866622-?0\b'}
+
+  # --- Tribanco (Banco Triângulo): extrato "TRIBANCO DD-MM.pdf" desde 11-09; no PDF a conta é 0230032-0.
+  #   Cadastro no Protheus: banco 634, agência 0001, conta 230032 (cliente, 09/10/2026).
+  - {chave: tribanco_cc, banco: "634", agencia: "0001", numero: "230032", tipo: corrente, arquivo: '^TRIBANCO\b'}

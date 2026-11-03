@@ -1,0 +1,399 @@
+import json
+from datetime import date
+from decimal import Decimal
+
+from lancamentos.leitura import ler_resposta_api
+from lancamentos.planejamento import documento, planejar
+from tests.conftest import DIA, FIXTURES
+
+
+def _transferencias(plano, origem, destino):
+    return [t for t in plano.transferencias if t.origem.chave == origem and t.destino.chave == destino]
+
+
+def _pendencias(plano, trecho):
+    return [p for p in plano.pendencias if trecho in p.motivo]
+
+
+def test_liberacao_de_caucao_lancada_uma_vez_e_pareada(extratos, cadastro):
+    plano = planejar(extratos, cadastro, DIA)
+
+    bradesco = _transferencias(plano, "bradesco_caucao", "bradesco_cc")
+    assert sorted(t.valor for t in bradesco) == [Decimal("51315.72"), Decimal("126933.86")]
+    assert all(t.aviso is None for t in bradesco)  # crédito achado no extrato da CC
+    assert all(t.historico == "TRANSF BRAD CAU P/ BRAD C/C" for t in bradesco)
+
+    itau = _transferencias(plano, "itau_caucao", "itau_cc")
+    assert len(itau) == 9 and all(t.aviso is None for t in itau)
+
+    # Nenhuma contrapartida sobrou como pendência
+    assert not _pendencias(plano, "sem o débito correspondente")
+
+
+def test_consolidacao_santander(extratos, cadastro):
+    plano = planejar(extratos, cadastro, DIA)
+
+    para_376 = _transferencias(plano, "santander_caucao_central", "santander_caucao_376")
+    para_432 = _transferencias(plano, "santander_caucao_central", "santander_caucao_432")
+    assert [t.valor for t in para_376] == [Decimal("70416.20")]
+    assert [t.valor for t in para_432] == [Decimal("107036.94")]
+    assert para_376[0].historico == "TRANSF SANT CAU P/ SANT CAU"
+
+    # A caução central não tem extrato próprio; os valores batem com o SALDO VINCULADO LIBERADO do dia
+    assert [t.valor for t in _transferencias(plano, "santander_caucao_376", "santander_cc")] == [Decimal("70416.20")]
+    assert [t.valor for t in _transferencias(plano, "santander_caucao_432", "santander_cc")] == [Decimal("107036.94")]
+
+    # Consolidação vem antes da liberação para a CC
+    chaves = [t.origem.chave for t in plano.transferencias]
+    assert chaves.index("santander_caucao_central") < chaves.index("santander_caucao_376")
+
+
+def test_resgate_usa_conta_aplicacao_do_mesmo_banco(extratos, cadastro):
+    plano = planejar(extratos, cadastro, DIA)
+    resgate = _transferencias(plano, "bradesco_aplic", "bradesco_cc")
+    assert [t.valor for t in resgate] == [Decimal("8047715.82")]
+    assert resgate[0].historico == "TRANSF BRAD RESGATE APLIC P/ BRAD CC"
+    assert resgate[0].aviso is None
+
+
+def test_tarifas_e_rendimentos(extratos, cadastro):
+    plano = planejar(extratos, cadastro, DIA)
+    tarifas_bradesco = [t.valor for t in plano.tarifas if t.conta.chave == "bradesco_cc"]
+    assert tarifas_bradesco == [Decimal(v) for v in ("90.00", "4.85", "9.70", "2.06", "84.20", "6.93")]
+    assert all(len(t.historico) <= 40 for t in plano.tarifas)
+    assert [r.valor for r in plano.rendimentos] == [Decimal("0.04"), Decimal("3.55")]
+    assert all(r.conta.chave == "itau_cc" and r.historico == "REND APLIC" for r in plano.rendimentos)
+
+
+def test_somente_lancamentos_da_data_do_movimento(extratos, cadastro):
+    plano = planejar(extratos, cadastro, DIA)
+    assert all(i.data == DIA for i in plano.itens())
+    # 10/09 tem tarifas no ABC que não podem entrar no plano de 09/09
+    assert Decimal("109.47") not in [t.valor for t in plano.tarifas]
+
+
+def test_nao_reconhecido_vira_pendencia_e_nao_lancamento(resposta_api, cadastro):
+    """Histórico sem regra: pendência, nunca lançamento. (Até 09/10/2026 o exemplo real era o "DOC/TED INTERNET" do
+    Bradesco, que a cliente definiu como tarifa de TED.)"""
+    for extrato in resposta_api["banco_0237"]:
+        for lancamento in extrato["lancamentos"]:
+            if lancamento["historico"].startswith("DOC/TED INTERNET"):
+                lancamento["historico"] = "LANCAMENTO SEM REGRA 1704220"
+    plano = planejar(ler_resposta_api(resposta_api, cadastro), cadastro, DIA)
+    nao_reconhecidos = _pendencias(plano, "não reconhecido")
+    assert {p.historico for p in nao_reconhecidos} == {"LANCAMENTO SEM REGRA 1704220"}
+    assert not [t for t in plano.tarifas if t.historico.startswith("LANCAMENTO SEM REGRA")]
+
+
+def test_doc_ted_internet_do_bradesco_e_tarifa(extratos, cadastro):
+    """Cliente, 09/10/2026: "DOC/TED INTERNET" no Bradesco = tarifa de TED."""
+    plano = planejar(extratos, cadastro, DIA)
+    assert not _pendencias(plano, "não reconhecido")
+    assert [t.valor for t in plano.tarifas if t.historico.startswith("DOC/TED INTERNET")] == [Decimal("6.93")]
+
+
+def test_kg_vira_pendencia_de_baixa_manual_e_dev_pag_bol_e_ignorado(extratos, cadastro):
+    """Respostas da cliente em 05/10/2026."""
+    plano = planejar(extratos, cadastro, DIA)
+    kg = [p for p in plano.pendencias if p.historico == "KG 3361823"]
+    assert len(kg) == 1 and "Contas a Pagar" in kg[0].motivo and "baixa manual" in kg[0].acao
+    assert Decimal("546127.35") not in [i.valor for i in plano.itens()]
+    assert not [p for p in plano.pendencias if (p.historico or "").startswith("DEV PAG BOL")]
+    assert any(l.historico.startswith("DEV PAG BOL") for l in plano.fora_do_escopo)
+
+
+def _daycoval():
+    """Saída real da API (layout Daycoval) para os extratos de exemplo enviados pela cliente em 05/10/2026."""
+    return json.loads((FIXTURES / "extratos_daycoval.json").read_text(encoding="utf-8"))
+
+
+def test_daycoval_liberacao_de_caucao(cadastro):
+    plano = planejar(ler_resposta_api(_daycoval(), cadastro), cadastro, date(2026, 9, 3))
+    transf = _transferencias(plano, "daycoval_caucao", "daycoval_cc")
+    assert [t.valor for t in transf] == [Decimal("100691.20")]
+    assert transf[0].aviso is None and transf[0].historico == "TRANSF DAYC CAU P/ DAYC C/C"
+    assert len(plano.itens()) == 1 and not plano.pendencias
+    saldos = {c.conta.chave: c.saldo_extrato for c in plano.conciliacoes}
+    assert saldos == {"daycoval_cc": Decimal("320049.70"), "daycoval_caucao": Decimal("0.00")}
+
+
+def test_daycoval_amortizacao_vira_pendencia(cadastro):
+    plano = planejar(ler_resposta_api(_daycoval(), cadastro), cadastro, date(2026, 9, 1))
+    assert [t.valor for t in plano.tarifas] == [Decimal("43.79")]
+    amortizacao = _pendencias(plano, "Amortização de contrato")
+    assert [p.valor for p in amortizacao] == [Decimal("85563.46")] and "baixa manual" in amortizacao[0].acao
+    assert not _pendencias(plano, "não reconhecido")
+
+
+def test_tarifa_agrupada_sem_detalhe_vira_pendencia(extratos, cadastro):
+    plano = planejar(extratos, cadastro, DIA)
+    pendencias = _pendencias(plano, "Tarifa agrupada")
+    assert sorted((p.conta.chave, p.valor) for p in pendencias) == [
+        ("bb_cc", Decimal("14.34")), ("itau_cc", Decimal("132.12")), ("itau_cc", Decimal("342.76"))]
+    assert not {Decimal("14.34"), Decimal("132.12"), Decimal("342.76")} & {t.valor for t in plano.tarifas}
+
+
+def test_tar_custas_itau_abre_pelo_relatorio_de_tarifas(resposta_api, cadastro):
+    """Cliente (05/10/2026): TAR/CUSTAS do Itaú não é lançado direto; abre pelo relatório de tarifas, como o BB."""
+    resposta_api["banco_0341"].append({
+        "arquivo": "TARIFAS ITAU 09-09.pdf", "metodo": "ia", "aviso": None, "conta": None,
+        "lancamentos": [{"data": "09/09/2026", "historico": h, "operacao": "debito", "valor": v}
+                        for h, v in (("TARIFA DE COBRANCA", 400.00), ("TARIFA MANUTENCAO TITULO VENCIDO", 74.88))],
+        "conferencia": {"saldo_anterior": None, "saldo_final": None, "ok": None},
+    })
+    plano = planejar(ler_resposta_api(resposta_api, cadastro), cadastro, DIA)
+    detalhadas = [t for t in plano.tarifas if t.origem_extrato.startswith("TARIFAS ITAU")]
+    assert [t.valor for t in detalhadas] == [Decimal("400.00"), Decimal("74.88")]  # soma = 132,12 + 342,76
+    assert all(t.conta.chave == "itau_cc" for t in detalhadas)
+    assert not [p for p in _pendencias(plano, "Tarifa agrupada") if p.conta.chave == "itau_cc"]
+
+
+def test_relatorio_real_do_itau_lanca_tarifa_por_boleto_da_linha_que_ele_explica(resposta_api, cadastro):
+    """Leitura real da API (layout "Tarifas Itaú") do relatório de 09/09: explica só a linha de R$ 342,76.
+    Cliente (06/10/2026): uma tarifa por boleto. A linha de R$ 132,12, sem relatório, continua pendência."""
+    resposta_api["banco_0341"] += json.loads((FIXTURES / "tarifas_itau_09-09.json").read_text(encoding="utf-8"))["banco_0341"]
+    plano = planejar(ler_resposta_api(resposta_api, cadastro), cadastro, DIA)
+
+    detalhadas = [t for t in plano.tarifas if t.origem_extrato.startswith("TARIFAS ITAU")]
+    assert len(detalhadas) == 374 and sum(t.valor for t in detalhadas) == Decimal("342.76")
+    assert all(t.conta.chave == "itau_cc" for t in detalhadas)
+    assert detalhadas[0].historico == "TAR COBRANCA 00118299-7"
+    pendentes_itau = [p.valor for p in _pendencias(plano, "Tarifa agrupada") if p.conta.chave == "itau_cc"]
+    assert pendentes_itau == [Decimal("132.12")]
+
+
+def _com_detalhe_bb(resposta_api, valores, arquivo="TARIFAS BB 09-09 I.pdf"):
+    resposta_api["banco_0001"].append({
+        "arquivo": arquivo, "metodo": "ia", "aviso": None, "conta": None,
+        "lancamentos": [{"data": "09/09/2026", "historico": f"Tarifa {i}", "operacao": "debito", "valor": v}
+                        for i, v in enumerate(valores)],
+        "conferencia": {"saldo_anterior": None, "saldo_final": None, "ok": None},
+    })
+    return resposta_api
+
+
+def test_tarifa_agrupada_com_detalhe_que_bate(resposta_api, cadastro):
+    extratos = ler_resposta_api(_com_detalhe_bb(resposta_api, [10.00, 4.34]), cadastro)
+    plano = planejar(extratos, cadastro, DIA)
+    individuais = [t for t in plano.tarifas if t.origem_extrato.startswith("TARIFAS BB")]
+    assert [t.valor for t in individuais] == [Decimal("10.00"), Decimal("4.34")]
+    assert all(t.conta.chave == "bb_cc" for t in individuais)
+    assert not [p for p in _pendencias(plano, "Tarifa agrupada") if p.conta.chave == "bb_cc"]
+
+
+def test_tarifa_agrupada_com_detalhe_que_nao_bate(resposta_api, cadastro):
+    extratos = ler_resposta_api(_com_detalhe_bb(resposta_api, [10.00, 4.33]), cadastro)
+    plano = planejar(extratos, cadastro, DIA)
+    assert not [t for t in plano.tarifas if t.origem_extrato.startswith("TARIFAS BB")]
+    assert "diferente do agrupado" in _pendencias(plano, "Tarifa agrupada")[0].motivo
+
+
+def test_tarifa_agrupada_ignora_relatorio_antigo_que_sobra_na_pasta(resposta_api, cadastro):
+    """BB 21/10/2026: "I" e "II" (versão da manhã) ficaram na pasta junto com "III" e "IV" (corretos, 14:32).
+    Só III + IV somam o agrupado: lança esses e avisa quais foram ignorados."""
+    for arquivo, valores in (("TARIFAS BB I.pdf", [2.02, 2.02]), ("TARIFAS BB II.pdf", [9.99]),
+                             ("TARIFAS BB III.pdf", [10.00]), ("TARIFAS BB IV.pdf", [4.34])):
+        _com_detalhe_bb(resposta_api, valores, arquivo)
+    plano = planejar(ler_resposta_api(resposta_api, cadastro), cadastro, DIA)
+
+    individuais = [t for t in plano.tarifas if t.origem_extrato.startswith("TARIFAS BB")]
+    assert [t.valor for t in individuais] == [Decimal("10.00"), Decimal("4.34")]
+    assert all("TARIFAS BB I.pdf, TARIFAS BB II.pdf" in t.aviso for t in individuais)
+    assert not [p for p in _pendencias(plano, "Tarifa agrupada") if p.conta.chave == "bb_cc"]
+
+
+def test_tarifa_agrupada_com_mais_de_um_conjunto_possivel_vira_pendencia_com_soma_por_relatorio(resposta_api, cadastro):
+    # I + II e II + III somam 14,34: não dá para saber qual é o certo
+    for arquivo, valores in (("TARIFAS BB I.pdf", [10.00]), ("TARIFAS BB II.pdf", [4.34]), ("TARIFAS BB III.pdf", [10.00])):
+        _com_detalhe_bb(resposta_api, valores, arquivo)
+    plano = planejar(ler_resposta_api(resposta_api, cadastro), cadastro, DIA)
+    assert not [t for t in plano.tarifas if t.origem_extrato.startswith("TARIFAS BB")]
+    motivo = _pendencias(plano, "Tarifa agrupada")[0].motivo
+    assert "diferente do agrupado" in motivo and "TARIFAS BB II.pdf: R$ 4,34" in motivo
+
+
+def test_extrato_com_conferencia_falha_nao_gera_lancamentos(resposta_api, cadastro):
+    resposta_api["banco_0237"][1]["conferencia"]["ok"] = False   # BRADESCO 50542-0
+    plano = planejar(ler_resposta_api(resposta_api, cadastro), cadastro, DIA)
+    assert not [t for t in plano.tarifas if t.conta.chave == "bradesco_cc"]
+    assert _pendencias(plano, "Conferência do extrato falhou")
+
+
+def test_saldo_para_conciliacao(extratos, cadastro):
+    plano = planejar(extratos, cadastro, DIA)
+    saldos = {c.conta.chave: c.saldo_extrato for c in plano.conciliacoes}
+    assert saldos["itau_caucao"] == Decimal("2943719.77")  # zerada no dia 10 pelo TEG de 2.943.719,77
+    assert saldos["bradesco_caucao"] == Decimal("0.00")
+    # Caixa: o extrato começa no dia útil seguinte; o saldo anterior é o saldo do dia
+    assert "caixa_cc" in saldos
+    # Safra não tem coluna de saldo (fixture da API antiga, sem saldos_informados): a C/C não concilia; a vinculada
+    # concilia zerada porque os lançamentos do dia se anulam
+    assert "safra_cc" not in saldos and _pendencias(plano, "não traz uma linha de saldo")
+    assert saldos["safra_vinculada"] == Decimal("0")
+
+
+def test_chaves_unicas_e_estaveis(extratos, cadastro):
+    primeiro = planejar(extratos, cadastro, DIA)
+    segundo = planejar(extratos, cadastro, DIA)
+    chaves = [i.chave for i in primeiro.itens()]
+    assert len(chaves) == len(set(chaves))
+    assert chaves == [i.chave for i in segundo.itens()]
+
+
+def test_documento():
+    assert documento(DIA, 0) == "090926"
+    assert documento(DIA, 3) == "0909263"
+
+
+def test_chave_nao_depende_do_texto_do_historico(extratos, cadastro):
+    """Ocorrência 0002 (MIT045): a leitura do PDF mudou o histórico (nome do pagador a mais; nosso número corrigido no
+    boleto BAZAR) e o mesmo lançamento ganhava chave nova -> era gravado de novo."""
+    from lancamentos.planejamento import _atribuir_chaves
+    plano = planejar(extratos, cadastro, DIA)
+    antes = [i.chave for i in plano.itens()]
+    for item in plano.itens():
+        item.historico = item.historico + " TEXTO DIFERENTE"
+    _atribuir_chaves(plano)
+    assert [i.chave for i in plano.itens()] == antes
+
+
+def test_itens_iguais_continuam_com_chaves_distintas(resposta_api, cadastro):
+    """Tarifas de mesmo valor na mesma conta e dia (R$ 0,89 por boleto do Itaú) são contadas uma a uma."""
+    from collections import Counter
+    resposta_api["banco_0341"] += json.loads((FIXTURES / "tarifas_itau_09-09.json").read_text(encoding="utf-8"))["banco_0341"]
+    plano = planejar(ler_resposta_api(resposta_api, cadastro), cadastro, DIA)
+    iguais = Counter((t.contas(), t.valor) for t in plano.tarifas)
+    assert max(iguais.values()) > 300
+    assert len({i.chave for i in plano.itens()}) == len(plano.itens())
+
+
+def _safra(saldos_cc, lancamentos_vinculada=None):
+    """Resposta da API no formato do Safra (sem coluna de saldo; saldos impressos como linhas)."""
+    sem_conferencia = {"saldo_anterior": None, "saldo_final": None, "ok": None}
+    vinculada = lancamentos_vinculada if lancamentos_vinculada is not None else [
+        {"data": "09/09/2026", "historico": "LIBERACAO DE VINCULADA 5802757", "operacao": "debito", "valor": 35908.23},
+        {"data": "09/09/2026", "historico": "CREDITO COBRANCA DISPONIVEL RESERVA", "operacao": "credito", "valor": 35908.23}]
+    return {"banco_0422": [
+        {"arquivo": "SAFRA 580275-7 10-09.pdf", "metodo": "layout Safra", "conta": "00580275-7",
+         "conferencia": sem_conferencia, "saldos_informados": saldos_cc, "lancamentos": [
+             {"data": "09/09/2026", "historico": "TAR LIQUIDACAO BOLETO COBRANCA", "operacao": "debito", "valor": 1.5},
+             {"data": "09/09/2026", "historico": "LIBERACAO DE CONTA VINCULADA 3266131", "operacao": "credito",
+              "valor": 35908.23}]},
+        {"arquivo": "SAFRA 326613-1 10-09.pdf", "metodo": "layout Safra", "conta": "000000326613-1",
+         "conferencia": sem_conferencia, "saldos_informados": [], "lancamentos": vinculada}]}
+
+
+SALDOS_SAFRA = [{"data": "09/09/2026", "descricao": "SALDO TOTAL", "valor": 1015457.41},
+                {"data": "09/09/2026", "descricao": "SALDO APLIC AUTOMATICA", "valor": 979100.0},
+                {"data": "09/09/2026", "descricao": "SALDO CONTA CORRENTE", "valor": 36357.41},
+                {"data": "08/09/2026", "descricao": "SALDO CONTA CORRENTE", "valor": 450.68}]
+
+
+def test_safra_concilia_cc_pela_linha_saldo_conta_corrente_e_vinculada_zerada(cadastro):
+    """Cliente, 14/10/2026: C/C pela linha "SALDO CONTA CORRENTE" do dia; vinculada sempre zerada."""
+    plano = planejar(ler_resposta_api(_safra(SALDOS_SAFRA), cadastro), cadastro, DIA)
+    saldos = {c.conta.chave: c.saldo_extrato for c in plano.conciliacoes}
+    assert saldos == {"safra_cc": Decimal("36357.41"), "safra_vinculada": Decimal("0")}
+    assert not _pendencias(plano, "sem saldo conferido")
+
+
+def test_safra_cc_sem_a_linha_do_dia_ou_com_leitura_incompleta_vira_pendencia(cadastro):
+    sem_a_do_dia = [s for s in SALDOS_SAFRA if s["data"] != "09/09/2026"]
+    plano = planejar(ler_resposta_api(_safra(sem_a_do_dia), cadastro), cadastro, DIA)
+    assert "safra_cc" not in {c.conta.chave for c in plano.conciliacoes}
+    assert _pendencias(plano, "não traz uma linha de saldo")
+    # saldo de 08/09 + lançamentos de 09/09 não dá o saldo informado de 09/09: algum lançamento não foi lido
+    divergente = [dict(s, valor=36000.0) if s["descricao"] == "SALDO CONTA CORRENTE" and s["data"] == "09/09/2026"
+                  else s for s in SALDOS_SAFRA]
+    plano = planejar(ler_resposta_api(_safra(divergente), cadastro), cadastro, DIA)
+    assert "safra_cc" not in {c.conta.chave for c in plano.conciliacoes}
+    assert _pendencias(plano, "pode haver lançamento não lido")
+
+
+def test_safra_vinculada_que_nao_zera_no_dia_vira_pendencia(cadastro):
+    so_o_credito = [{"data": "09/09/2026", "historico": "CREDITO COBRANCA DISPONIVEL RESERVA", "operacao": "credito",
+                     "valor": 35908.23}]
+    plano = planejar(ler_resposta_api(_safra(SALDOS_SAFRA, so_o_credito), cadastro), cadastro, DIA)
+    assert "safra_vinculada" not in {c.conta.chave for c in plano.conciliacoes}
+    assert _pendencias(plano, "deve fechar o dia zerada")
+
+
+def test_itau_cc_concilia_pelo_saldo_total_disponivel_do_dia(cadastro):
+    """Cliente, 16/10/2026: Itaú C/C concilia pela linha "SALDO TOTAL DISPONÍVEL DIA" da data do movimento."""
+    resposta = {"banco_0341": [{
+        "arquivo": "ITAU 6896-9  15-10.pdf", "metodo": "layout Itaú", "conta": "06896-9",
+        "conferencia": {"saldo_anterior": 467258.64, "saldo_final": -98407.74, "ok": True},
+        "lancamentos": [{"data": "14/10/2026", "historico": "TAR 30H INT EMPR PLUS", "operacao": "debito", "valor": 52.4}],
+        "saldos_informados": [{"data": "14/10/2026", "descricao": "SALDO TOTAL DISPONÍVEL DIA", "valor": 665147.94},
+                              {"data": "14/10/2026", "descricao": "SALDO MOVIMENTAÇÃO CONTA", "valor": 1.0},
+                              {"data": "15/10/2026", "descricao": "SALDO EM CONTA CORRENTE", "valor": -98407.74}]}]}
+    plano = planejar(ler_resposta_api(resposta, cadastro), cadastro, date(2026, 10, 14))
+    assert {c.conta.chave: c.saldo_extrato for c in plano.conciliacoes} == {"itau_cc": Decimal("665147.94")}
+
+
+def _pix(arquivo, conta, lancamentos):
+    return {"arquivo": arquivo, "metodo": "layout", "conta": conta,
+            "conferencia": {"saldo_anterior": None, "saldo_final": None, "ok": None},
+            "lancamentos": [{"data": "19/10/2026", "historico": h, "operacao": op, "valor": v} for h, op, v in lancamentos]}
+
+
+def test_pix_entre_contas_da_aeroflex_vira_transferencia(cadastro):
+    """Cliente, 20/10/2026 (movimento de 19/10): PIX de Bradesco, Santander e ABC para o Itaú C/C."""
+    resposta = {
+        "banco_0237": [_pix("BRADESCO 50542-0 20-10.pdf", "0050542-0",
+                            [("PIX ENVIADO DES: AEROFLEX IND STRIA DE 19/10 1627421", "debito", 700000.0)])],
+        "banco_0033": [_pix("SANTANDER 130018420 20-10.pdf", "13001842",
+                            [("PAGFOR PIX OUTRA INST- MESMA T IT D - 000001 031019", "debito", 1000000.0)])],
+        "banco_0246": [_pix("ABC 6609345-9 20-10.pdf", "6609345",
+                            [("PAGAMENTO PIX", "debito", 1260000.0),
+                             ("PAGAMENTO PIX", "debito", 5432.10)])],          # PIX a fornecedor: sem par
+        "banco_0341": [_pix("ITAU 6896-9 20-10.pdf", "06896-9",
+                            [("PIX RECEBIDO AEROFLE19/10", "credito", 1260000.0),
+                             ("PIX RECEBIDO AEROFLE19/10", "credito", 700000.0),
+                             ("PIX RECEBIDO AEROFLE19/10", "credito", 1000000.0)])],
+    }
+    plano = planejar(ler_resposta_api(resposta, cadastro), cadastro, date(2026, 10, 19))
+    transf = {(t.origem.chave, t.destino.chave, t.valor, t.historico) for t in plano.transferencias}
+    assert transf == {("bradesco_cc", "itau_cc", Decimal("700000.00"), "TRANSF BRAD C/C P/ ITAU C/C"),
+                      ("santander_cc", "itau_cc", Decimal("1000000.00"), "TRANSF SANT C/C P/ ITAU C/C"),
+                      ("abc_cc", "itau_cc", Decimal("1260000.00"), "TRANSF ABC C/C P/ ITAU C/C")}
+    assert [l.valor for l in plano.fora_do_escopo] == [Decimal("5432.10")]   # PIX comum continua fora do escopo
+    assert not _pendencias(plano, "PIX")
+
+
+def test_pix_da_aeroflex_sem_par_vira_pendencia(cadastro):
+    resposta = {"banco_0237": [_pix("BRADESCO 50542-0 20-10.pdf", "0050542-0",
+                                    [("PIX ENVIADO DES: AEROFLEX IND STRIA DE 19/10 1627421", "debito", 700000.0)])]}
+    plano = planejar(ler_resposta_api(resposta, cadastro), cadastro, date(2026, 10, 19))
+    assert not plano.transferencias
+    assert [p.valor for p in _pendencias(plano, "PIX entre contas da Aeroflex")] == [Decimal("700000.00")]
+
+
+def test_caucao_central_do_santander_fora_da_automacao(cadastro):
+    """Cliente, 21/10/2026: a 29000181-8 saiu da automação. Se o extrato dela vier na pasta, nada é lançado nem
+    conciliado e não vira pendência (os créditos de cobrança ficam só como informação)."""
+    extrato = _pix("SANTANDER 290001818 20-10.pdf", "290001818",
+                   [("COBRANCA GARANTIA 000000", "credito", 4422.2), ("COBRANCA GARANTIA 000000", "credito", 1203.6)])
+    extrato["conferencia"] = {"saldo_anterior": 363924.25, "saldo_final": 369550.05, "ok": True}
+    plano = planejar(ler_resposta_api({"banco_0033": [extrato]}, cadastro), cadastro, date(2026, 10, 19))
+    assert not plano.transferencias and len(plano.fora_do_escopo) == 2
+    assert not plano.conciliacoes and not plano.pendencias
+
+
+def test_ted_entre_contas_da_aeroflex_vira_transferencia_e_tarifa_de_ted_nao(cadastro):
+    """Cliente, 21/10/2026 (movimento de 20/10): TED da Caixa C/C para o Itaú C/C. A tarifa do TED nunca é transferência."""
+    resposta = {
+        "banco_0104": [_pix("BANCO CAIXA 21-10.pdf", "0005769805",
+                            [("ENVIO DE TED 07872967000102 AEROFLEX INDUSTRIA DE AEROSOL LTDA 123 11:49:29", "debito", 400000.0),
+                             ("TARIFA TED GUICHE CAIXA 123 11:49:29", "debito", 25.0)])],
+        "banco_0341": [_pix("ITAU 6896-9 21-10.pdf", "06896-9",
+                            [("TED RECEBIDA 104.4266.AEROFLEX I", "credito", 400000.0),
+                             ("TED RECEBIDA 237.1234.FORNECEDOR X", "credito", 25.0)])],
+    }
+    for extrato in resposta.values():
+        extrato[0]["lancamentos"] = [dict(l, data="20/10/2026") for l in extrato[0]["lancamentos"]]
+    plano = planejar(ler_resposta_api(resposta, cadastro), cadastro, date(2026, 10, 20))
+    assert {(t.origem.chave, t.destino.chave, t.valor, t.historico) for t in plano.transferencias} == \
+        {("caixa_cc", "itau_cc", Decimal("400000.00"), "TRANSF CEF C/C P/ ITAU C/C")}
+    assert [t.valor for t in plano.tarifas] == [Decimal("25.00")]
+    assert not _pendencias(plano, "PIX entre contas")

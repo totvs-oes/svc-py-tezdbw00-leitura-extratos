@@ -39,7 +39,16 @@ docker compose up -d --build                 # API na porta 5000; cria a rede "t
 - `POST /extratos` — upload `multipart/form-data`, campo `arquivos` (um ou mais PDFs, máx. 20 MB). Usada pelo script do cliente (`cliente/`) e pelo robô em modo local.
 - `POST /transcribe` — só teste: lê os PDFs fixos de `docs_example/` (filtro opcional `?arquivo=ABC`). Cada lançamento traz também `opcao`/`descricao_opcao` da Movimentação Bancária do Protheus (FINA100: 3 = a Pagar para débito, 4 = a Receber para crédito) `conta` (a do extrato) e, como o extrato, `banco`/`agencia` do Cadastro de Bancos do Protheus (tabela em `services/contas_protheus.py`, pelo número da conta lido do PDF; conta fora da tabela → `agencia: null`), para integração direta pela API do Protheus; `/extratos` e `/extratos/sftp` (robô) não têm esses campos.
 
-Resposta: `{"banco_<COMPE>": [ExtratoConta]}` — ver `schemas/extrato.py`.
+- `POST /lancamentos/sftp` — **para lançar pela API do Protheus.** JSON `{"data_movimento": "AAAA-MM-DD"}` (padrão: dia útil anterior a hoje; `FERIADOS` no .env/Gerenciador). Acha os PDFs na pasta do dia útil seguinte do SFTP (+ Safra ATUALIZADO pela data do nome), lê e aplica as regras da AEROFLEX (`lancamentos/`). Resposta: `lancamentos` (opção 3/4/7, natureza, banco/agência/conta do cadastro, documento, `chave`), `pendencias` e `fora_do_escopo` (NÃO lançar) e `extratos`. 404 se a pasta do dia não tem extratos.
+- `POST /lancamentos` — o mesmo, com os PDFs por upload (`data_movimento` + `arquivos`, nomes originais: identificam as contas).
+
+Resposta de `/extratos*` e `/transcribe`: `{"banco_<COMPE>": [ExtratoConta]}` — ver `schemas/extrato.py`.
+
+### Lançamentos (`lancamentos/`, `config/contas.yaml`, `config/regras.yaml`)
+
+Cópia da lógica de decisão do robô (`../bot-py-tezdbw00-conciliacao-bancaria`: `conciliacao/{modelos,texto,classificacao,planejamento}.py`, `conciliacao/extratos/{pastas,leitura}.py`, `config/*.yaml`), só com os imports trocados; `cadastro.py` é o `configuracao.py` sem a parte do Protheus. Testes portados: `tests/test_lancamentos_{classificacao,planejamento,pastas}.py` (+ `tests/conftest.py` e fixtures). Enquanto o robô existir, **regra nova entra nos dois repos** (YAML + teste). Os YAML são lidos uma vez por processo: reinicie a API depois de mudá-los.
+- `integracao.py`: o JSON da resposta, com os valores que o robô preenchia na tela; documento DDMMAA+sequencial por rotina/banco/dia na ordem do plano (sem banco de dados: chamar de novo devolve os mesmos). `chave` = identidade do lançamento: quem lança não deve lançar a mesma chave duas vezes (ex.: dia chamado de novo depois do Safra ATUALIZADO).
+- Não faz: conciliação, nem reprocessar sozinho o dia anterior (o robô fazia com o Safra ATUALIZADO: aqui, chame o dia anterior de novo e lance só as chaves novas).
 
 ### SFTP (`services/sftp_service.py`)
 
@@ -59,7 +68,9 @@ services/sftp_service.py       conexão SFTP com o servidor do cliente: listar e
 services/transcribe_service.py orquestra: sem texto -> aviso | layout conhecido -> parser | senão -> IA; conferência de saldo
 llm/llm.py                     fallback com IA: ChatOpenAI no proxy da TOTVS (structured output json_schema, uma chamada por página)
 schemas/extrato.py             contrato da resposta
-routers/                       sftp_router (listar e ler do SFTP), extratos_router (upload), transcribe_router (teste)
+routers/                       sftp_router (listar e ler do SFTP), extratos_router (upload), transcribe_router (teste), lancamentos_router
+lancamentos/                   regras da AEROFLEX (cópia do robô): classificação, plano do dia, JSON para o Protheus
+config/                        contas.yaml e regras.yaml (os mesmos do robô)
 cliente/                       script que roda no Windows Server do cliente: entrada -> API -> lidos | erro
 ```
 

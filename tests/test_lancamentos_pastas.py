@@ -1,0 +1,120 @@
+from datetime import date
+from pathlib import Path
+
+import pytest
+
+from lancamentos.pastas import (banco_do_detalhe_de_tarifas, conta_do_arquivo, dia_util_anterior,
+                                         listar_extratos, pasta_do_dia)
+
+
+def test_pasta_do_dia():
+    raiz = Path(r"Z:\A PAGAR\AEROFLEX")
+    assert pasta_do_dia(raiz, date(2026, 8, 13)) == raiz / "2026 AEROFLEX" / "08 - AGOSTO" / "13-08"
+
+
+def test_pasta_do_dia_tolera_acento(tmp_path):
+    (tmp_path / "2026 AEROFLEX" / "03 - MARCO" / "05-03").mkdir(parents=True)
+    assert pasta_do_dia(tmp_path, date(2026, 3, 5)) == tmp_path / "2026 AEROFLEX" / "03 - MARCO" / "05-03"
+
+
+def test_dia_util_anterior():
+    assert dia_util_anterior(date(2026, 9, 14)) == date(2026, 9, 11)            # segunda -> sexta
+    assert dia_util_anterior(date(2026, 9, 8), [date(2026, 9, 7)]) == date(2026, 9, 4)  # feriado 7/9
+
+
+@pytest.mark.parametrize("arquivo, conta", [
+    ("ABC 6609345-9 10-09.pdf", "abc_cc"),
+    ("ABC 6609348-3 10-09.pdf", "abc_caucao"),
+    ("BANCO CAIXA 10-09.pdf", "caixa_cc"),
+    ("CAIXA CC 15-10.pdf", "caixa_cc"),
+    ("CAIXA CC.pdf", "caixa_cc"),                # 19/10/2026: sem data no nome, a Caixa ficava sem conta
+    ("CAIXA VINCULADA.pdf", "caixa_vinculada"),          # 15/10/2026: sem conta, as tarifas da Caixa não eram lançadas
+    ("BANCO DO BRASIL 410004 10-09.pdf", "bb_cc"),
+    ("BRADESCO 3179-8 10-09.pdf", "bradesco_caucao"),
+    ("BRADESCO 50542-0 10-09.pdf", "bradesco_cc"),
+    ("ITAU 6896-9 10-09.pdf", "itau_cc"),
+    ("ITAU 8311-7 10-09.pdf", "itau_caucao"),
+    ("SAFRA 326613-1  10-09.pdf", "safra_vinculada"),
+    ("SAFRA 580275-7  10-09.pdf", "safra_cc"),
+    ("SAFRA 580275-7 11-08.pdf ATUALIZADO.pdf", "safra_cc"),
+    ("SANTANDER 130018420 10-09.pdf", "santander_cc"),
+    ("SANTANDER 290003762 10-09.pdf", "santander_caucao_376"),
+    ("SANTANDER 290004323 10-09.pdf", "santander_caucao_432"),
+    # Variações vistas nas pastas 11-09 a 16-09
+    ("BANCO CAIXA - 14-09.pdf", "caixa_cc"),
+    ("CAIXA VINCULADA.pdf", "caixa_vinculada"),
+    ("BANCO DO BRASIL 41000.4 14-09.pdf", "bb_cc"),
+    ("BANCO DO BRASIL APLIC.pdf", "bb_aplic"),
+    ("ABC 06609345-9 15-09.pdf", "abc_cc"),
+    ("ITAU 6896-9  10-09.pdf", "itau_cc"),
+    ("TRIBANCO 11-09.pdf", "tribanco_cc"),
+])
+def test_conta_do_arquivo(cadastro, arquivo, conta):
+    assert conta_do_arquivo(arquivo, cadastro).chave == conta
+
+
+def test_arquivo_desconhecido(cadastro):
+    assert conta_do_arquivo("extrato-da-sua-conta-01M3W87.pdf", cadastro) is None
+
+
+@pytest.mark.parametrize("arquivo, banco", [
+    ("TARIFAS ABC 09-09.pdf", "246"),
+    ("TARIFAS BB 09-09 II.pdf", "001"),
+    ("EXTRATO DE TARIFAS ITAU 13-08.pdf", "341"),
+    ("ITAU 6896-9 10-09.pdf", None),
+])
+def test_detalhe_de_tarifas(cadastro, arquivo, banco):
+    assert banco_do_detalhe_de_tarifas(arquivo, cadastro) == banco
+
+
+def test_atualizado_substitui_original(cadastro, tmp_path):
+    pasta_dia, pasta_mov = tmp_path / "12-08", tmp_path / "11-08"
+    pasta_dia.mkdir()
+    pasta_mov.mkdir()
+    for nome in ("SAFRA 580275-7 12-08.pdf", "ITAU 6896-9 12-08.pdf"):
+        (pasta_dia / nome).write_bytes(b"%PDF-")
+    (pasta_mov / "SAFRA 580275-7 11-08.pdf ATUALIZADO.pdf").write_bytes(b"%PDF-")
+    (pasta_mov / "ITAU 6896-9 11-08.pdf").write_bytes(b"%PDF-")  # sem ATUALIZADO: ignorado
+
+    nomes = [p.name for p in listar_extratos(pasta_dia, pasta_mov, cadastro)]
+    assert nomes == ["ITAU 6896-9 12-08.pdf", "SAFRA 580275-7 11-08.pdf ATUALIZADO.pdf"]
+
+
+def test_atualizado_da_pasta_do_dia_e_do_movimento_seguinte(cadastro, tmp_path):
+    """Pasta 11-09 (movimento de 10/09) com "SAFRA 580275-7 11-09.pdf ATUALIZADO.pdf", que só tem o dia 11/09:
+    o movimento de 10/09 usa o original; o ATUALIZADO entra no movimento de 11/09 (pasta 14-09)."""
+    p10, p11, p14 = tmp_path / "10-09", tmp_path / "11-09", tmp_path / "14-09"
+    for pasta in (p10, p11, p14):
+        pasta.mkdir()
+    (p11 / "SAFRA 580275-7 11-09.pdf").write_bytes(b"%PDF-")
+    (p11 / "SAFRA 580275-7 11-09.pdf ATUALIZADO.pdf").write_bytes(b"%PDF-")
+    (p14 / "SAFRA 580275-7 14-09.pdf").write_bytes(b"%PDF-")
+
+    assert [p.name for p in listar_extratos(p11, p10, cadastro)] == ["SAFRA 580275-7 11-09.pdf"]
+    assert [p.name for p in listar_extratos(p14, p11, cadastro)] == ["SAFRA 580275-7 11-09.pdf ATUALIZADO.pdf"]
+
+
+def _pasta_15_10(tmp_path):
+    """Cenário real de 16/10/2026: pasta 15-10 com os extratos normais do movimento de 14/10 e, salvo no dia
+    seguinte, o ATUALIZADO do Safra de 14/10. A pasta 16-10 (movimento de 15/10) ainda pode estar vazia."""
+    raiz = tmp_path / "2026 AEROFLEX" / "10 - OUTUBRO"
+    p14, p15, p16 = raiz / "14-10", raiz / "15-10", raiz / "16-10"
+    for pasta in (p14, p15, p16):
+        pasta.mkdir(parents=True)
+    for nome in ("SAFRA 580275-7  15-10.pdf", "ITAU 6896-9  15-10.pdf", "SAFRA 580275-7  14-10.pdf ATUALIZADO.pdf"):
+        (p15 / nome).write_bytes(b"%PDF-")
+    return tmp_path, p14, p15, p16
+
+
+def test_atualizado_vale_para_o_movimento_da_data_do_nome(cadastro, tmp_path):
+    _, p14, p15, p16 = _pasta_15_10(tmp_path)
+    # movimento de 14/10 (pasta 15-10): o ATUALIZADO de 14-10 substitui o extrato normal do Safra
+    assert sorted(p.name for p in listar_extratos(p15, p14, cadastro, data_movimento=date(2026, 10, 14))) == \
+        ["ITAU 6896-9  15-10.pdf", "SAFRA 580275-7  14-10.pdf ATUALIZADO.pdf"]
+    # movimento de 15/10 com a pasta 16-10 vazia: não é o dia (o ATUALIZADO de 14-10 sozinho não conta)
+    assert listar_extratos(p16, p15, cadastro, data_movimento=date(2026, 10, 15)) == []
+    # pasta 16-10 chegou: o ATUALIZADO de 14-10 não entra no movimento de 15/10
+    (p16 / "SAFRA 580275-7  16-10.pdf").write_bytes(b"%PDF-")
+    assert [p.name for p in listar_extratos(p16, p15, cadastro, data_movimento=date(2026, 10, 15))] == \
+        ["SAFRA 580275-7  16-10.pdf"]
+
