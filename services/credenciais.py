@@ -26,7 +26,7 @@ from typing import Optional
 SERVICO = "AEROFLEX RPA"
 SEGREDOS = ("TOKEN", "TOKEN_API_LLM", "SFTP_USUARIO", "SFTP_SENHA")
 # Não são segredos, mas também ficam no Gerenciador (endereços e parâmetros do ambiente da cliente)
-CONFIGURACOES = ("LLM_BASE_API_URL", "LLM_MODEL", "FERIADOS")
+CONFIGURACOES = ("LLM_BASE_API_URL", "LLM_MODEL", "FERIADOS", "PASTA_EXTRATOS")
 NOMES = SEGREDOS + CONFIGURACOES
 ARQUIVO_ENV = Path(__file__).resolve().parent.parent / ".env"
 

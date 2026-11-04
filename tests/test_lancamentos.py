@@ -3,6 +3,7 @@ import json
 from contextlib import contextmanager
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -93,18 +94,60 @@ def test_mesma_entrada_mesmo_resultado(extratos, cadastro):
 # --- Rotas -------------------------------------------------------------------------------------------------------
 def test_rotas_exigem_token(cliente):
     assert cliente.post("/lancamentos/sftp", json={}).status_code == 401
-    assert cliente.post("/lancamentos", data={"data_movimento": "2026-09-09"},
-                        files={"arquivos": ("a.pdf", b"%PDF-1.4", "application/pdf")}).status_code == 401
+    assert cliente.post("/lancamentos", json={"data_movimento": "2026-09-09"}).status_code == 401
 
 
-def test_upload_devolve_os_lancamentos(cliente, monkeypatch):
-    monkeypatch.setattr(lancamentos_router, "transcrever_uploads", lambda pdfs: _resposta_lida())
-    resposta = cliente.post("/lancamentos", headers=CABECALHO, data={"data_movimento": "2026-09-09"},
-                            files={"arquivos": ("BRADESCO 3179-8 10-09.pdf", b"%PDF-1.4", "application/pdf")})
+def _pasta_com_os_extratos_de_exemplo(raiz: Path, monkeypatch) -> list[str]:
+    """Pasta da cliente em disco (movimento 09/09 -> pasta 10-09) com um PDF falso por extrato da fixture; a leitura
+    de cada PDF devolve o extrato correspondente de extratos_exemplo.json."""
+    from services import transcribe_service
+    lidos = {e.arquivo: (banco, e) for banco, lista in _resposta_lida().items() for e in lista}
+    pasta = raiz / "2026 AEROFLEX" / "09 - SETEMBRO" / "10-09"
+    pasta.mkdir(parents=True)
+    for nome in lidos:
+        (pasta / nome).write_bytes(b"%PDF-1.4 teste")
+    (pasta / "anotacoes.txt").write_text("não é PDF")
+    outra = raiz / "2026 AEROFLEX" / "09 - SETEMBRO" / "11-09"
+    outra.mkdir()
+    (outra / "BRADESCO 3179-8 11-09.pdf").write_bytes(b"%PDF-1.4 teste")   # pasta de outro dia: não entra
+    abertos: list[str] = []
+
+    def transcrever_pdf(nome, conteudo):
+        abertos.append(nome)
+        return lidos[nome]
+
+    monkeypatch.setattr(transcribe_service, "transcrever_pdf", transcrever_pdf)
+    monkeypatch.setenv("PASTA_EXTRATOS", str(raiz))
+    return abertos
+
+
+def test_pasta_de_extratos_pelo_body_json(cliente, monkeypatch, tmp_path):
+    """POST /lancamentos {"data_movimento"}: lê sozinho a pasta do dia útil seguinte na PASTA_EXTRATOS."""
+    abertos = _pasta_com_os_extratos_de_exemplo(tmp_path, monkeypatch)
+    resposta = cliente.post("/lancamentos", headers=CABECALHO, json={"data_movimento": "2026-09-09"})
     assert resposta.status_code == 200
     corpo = resposta.json()
-    assert corpo["data_movimento"] == "2026-09-09" and len(corpo["lancamentos"]) == 44
+    assert corpo["data_movimento"] == "2026-09-09" and len(corpo["lancamentos"]) == 44   # = plano da fixture
     assert {"pendencias", "fora_do_escopo", "extratos"} <= set(corpo)
+    assert sorted(abertos) == sorted(e.arquivo for l in _resposta_lida().values() for e in l)   # só a pasta 10-09
+
+
+def test_pasta_do_dia_vazia_ou_pasta_de_extratos_nao_configurada(cliente, monkeypatch, tmp_path):
+    _pasta_com_os_extratos_de_exemplo(tmp_path, monkeypatch)
+    vazia = cliente.post("/lancamentos", headers=CABECALHO, json={"data_movimento": "2026-09-14"})
+    assert vazia.status_code == 404 and "15-09" in vazia.json()["detail"]
+
+    monkeypatch.setenv("PASTA_EXTRATOS", "")
+    sem_pasta = cliente.post("/lancamentos", headers=CABECALHO, json={"data_movimento": "2026-09-09"})
+    assert sem_pasta.status_code == 503 and "PASTA_EXTRATOS" in sem_pasta.json()["detail"]
+
+    monkeypatch.setenv("PASTA_EXTRATOS", str(tmp_path / "nao_existe"))
+    assert cliente.post("/lancamentos", headers=CABECALHO, json={"data_movimento": "2026-09-09"}).status_code == 503
+
+
+def test_lancamentos_nao_aceita_mais_form_data(cliente):
+    resposta = cliente.post("/lancamentos", headers=CABECALHO, data={"data_movimento": "2026-09-09"})
+    assert resposta.status_code == 422
 
 
 class SftpFalso:

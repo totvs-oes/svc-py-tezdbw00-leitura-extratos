@@ -1,21 +1,19 @@
 from datetime import date
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from llm.erros import ErroIA, erro_ia_para_http
-from routers.extratos_router import _ler_pdf, _nome_do_arquivo
 from routers.sftp_router import _erro_http, _ler_um
 from security.security import verify_token
 from services.lancamentos_service import (
+    PastaNaoConfigurada,
     SemExtratos,
     feriados_configurados,
-    lancamentos,
+    lancamentos_da_pasta,
     lancamentos_do_sftp,
     movimento_padrao,
 )
 from services.sftp_service import CaminhoInvalido, ErroSftp
-from services.transcribe_service import transcrever_uploads
 
 router = APIRouter(dependencies=[Depends(verify_token)])
 
@@ -30,33 +28,35 @@ class PedidoLancamentos(BaseModel):
         default=None, description="Data dos lançamentos (AAAA-MM-DD). Padrão: dia útil anterior a hoje.")
 
 
+def _data(pedido: PedidoLancamentos, feriados: frozenset[date]) -> date:
+    return pedido.data_movimento or movimento_padrao(feriados)
+
+
+@router.post("/lancamentos", status_code=status.HTTP_200_OK, response_description=DESCRICAO_RESPOSTA,
+             responses={404: {"description": "Pasta do dia sem extratos."},
+                        503: {"description": "PASTA_EXTRATOS não configurada ou inacessível."}})
+def lancamentos_pasta(pedido: PedidoLancamentos) -> dict:
+    """Lançamentos do dia a partir da pasta de extratos (PASTA_EXTRATOS), com as regras da AEROFLEX.
+
+    JSON {"data_movimento": "AAAA-MM-DD"}. Usa a pasta do dia útil seguinte ao movimento (onde a cliente salva os
+    extratos) e o Safra ATUALIZADO, como o robô de conciliação."""
+    feriados = feriados_configurados()
+    try:
+        return lancamentos_da_pasta(_data(pedido, feriados), feriados)
+    except SemExtratos as erro:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(erro))
+    except PastaNaoConfigurada as erro:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(erro))
+
+
 @router.post("/lancamentos/sftp", status_code=status.HTTP_200_OK, response_description=DESCRICAO_RESPOSTA,
              responses={404: {"description": "Pasta do dia sem extratos."}})
 def lancamentos_sftp(pedido: PedidoLancamentos) -> dict:
-    """Lançamentos do dia a partir dos extratos do SFTP do cliente, com as regras da AEROFLEX.
-
-    Usa a pasta do dia útil seguinte ao movimento (onde a cliente salva os extratos) e o Safra ATUALIZADO,
-    como o robô de conciliação."""
+    """O mesmo de POST /lancamentos, com os extratos do SFTP do cliente."""
     feriados = feriados_configurados()
-    data_movimento = pedido.data_movimento or movimento_padrao(feriados)
     try:
-        return lancamentos_do_sftp(data_movimento, feriados, _ler_um)
+        return lancamentos_do_sftp(_data(pedido, feriados), feriados, _ler_um)
     except SemExtratos as erro:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(erro))
     except (CaminhoInvalido, ErroSftp) as erro:
         raise _erro_http(erro)
-
-
-@router.post("/lancamentos", status_code=status.HTTP_200_OK, response_description=DESCRICAO_RESPOSTA)
-def lancamentos_upload(
-    data_movimento: date = Form(..., description="Data dos lançamentos (AAAA-MM-DD)."),
-    arquivos: list[UploadFile] = File(..., description="Extratos em PDF do movimento (com os nomes originais)."),
-) -> dict:
-    """Lançamentos do dia a partir de PDFs enviados por upload. Os nomes dos arquivos identificam as contas
-    (config/contas.yaml), como na pasta da cliente."""
-    pdfs = [(_nome_do_arquivo(arquivo), _ler_pdf(arquivo)) for arquivo in arquivos]
-    try:
-        resposta = transcrever_uploads(pdfs)
-    except ErroIA as erro:
-        raise erro_ia_para_http(erro)
-    return lancamentos(resposta, data_movimento, feriados_configurados())
