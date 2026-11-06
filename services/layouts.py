@@ -47,6 +47,8 @@ class Layout:
     inicio_dos_lancamentos: str | None = None  # só considera lançamentos após essa linha
     operacao_padrao: str | None = None         # ex.: relatório de tarifas é sempre débito
     anexar_linhas_sem_valor: bool = False         # BB: complemento do histórico vem na linha de baixo
+    # Itaú: histórico em 2 linhas cortado pela virada de página (rodapé sem data/valor; resto + valor no topo da seguinte)
+    emendar_historico_entre_paginas: bool = False
     conferir_saldo: bool = True
     # Linhas que informam o saldo da conta corrente ao longo do extrato (pontos de controle).
     # Se o saldo corrido divergir delas, há movimentação que o banco não listou.
@@ -184,6 +186,9 @@ LAYOUTS: list[Layout] = [
         # Linhas de saldo do dia devolvidas em saldos_informados: a cliente concilia a C/C pelo "SALDO TOTAL DISPONÍVEL
         # DIA" (conta + aplicação automática) da data do movimento (16/10/2026)
         saldos_informados=r"^SALDO (TOTAL DISPONIVEL DIA|MOVIMENTACAO CONTA|EM CONTA CORRENTE)\b",
+        # 06/11/2026: "TED RECEBIDA 104.4266.AEROFLEX" no rodapé da página e "I" + valor no topo da seguinte: o histórico
+        # chegava só como "I" e a TED da Caixa de R$ 700.000,00 não era reconhecida como transferência
+        emendar_historico_entre_paginas=True,
     ),
     Layout(
         nome="Safra", codigo_banco="0422",
@@ -409,8 +414,9 @@ def extrair_com_layout(paginas: list[list[Linha]], layout: Layout, texto: str, a
     saldo_corrido: float | None = None
     datas_vistas: list[str] = []
     datas_com_aplicacao: set[str] = set()
+    historico_orfao: tuple[int, str] | None = None   # (página, texto) da linha sem data/valor (emendar_historico_...)
 
-    for pagina in paginas:
+    for numero_pagina, pagina in enumerate(paginas):
         for linha in pagina:
             texto_linha = sem_acentos(renderizar(linha)).strip()
             if layout.ignorar_linhas and re.search(layout.ignorar_linhas, texto_linha):
@@ -443,6 +449,12 @@ def extrair_com_layout(paginas: list[list[Linha]], layout: Layout, texto: str, a
 
             saldo = parse_saldo(celulas[SALDO][-1]) if SALDO in celulas else None
             valor, operacao = _valor_e_operacao(celulas, layout)
+
+            if layout.emendar_historico_entre_paginas:
+                if historico_orfao and historico_orfao[0] == numero_pagina - 1 and valor is not None:
+                    historico = f"{historico_orfao[1]} {historico}".strip()
+                sem_lancamento = valor is None and saldo is None and not datas and historico
+                historico_orfao = (numero_pagina, historico) if sem_lancamento else None
 
             if ultima_data and (not datas_vistas or datas_vistas[-1] != ultima_data):
                 datas_vistas.append(ultima_data)
