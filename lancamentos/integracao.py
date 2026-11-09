@@ -68,6 +68,9 @@ def plano_para_integracao(plano: Plano, constantes: dict) -> dict:
                         "historico": p.historico, "valor": str(p.valor) if p.valor is not None else None,
                         **(_conta(p.conta) if p.conta else {}), "motivo": p.motivo, "acao": p.acao}
                        for p in plano.pendencias],
+        "baixa_manual": [{"arquivo": b.arquivo, "data": b.data.isoformat(), "historico": b.historico,
+                          "valor": str(b.valor), **_conta(b.conta), "motivo": b.motivo, "acao": b.acao}
+                         for b in plano.baixa_manual],
         "fora_do_escopo": [{"arquivo": l.arquivo, "data": l.data.isoformat(), "historico": l.historico,
                             "operacao": l.operacao, "valor": str(l.valor), **_conta(l.conta)}
                            for l in plano.fora_do_escopo],

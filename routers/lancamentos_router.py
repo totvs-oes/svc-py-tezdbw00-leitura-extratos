@@ -20,7 +20,8 @@ router = APIRouter(dependencies=[Depends(verify_token)])
 DESCRICAO_RESPOSTA = (
     "lancamentos: o que lançar no Protheus (opcao 3 = a Pagar, 4 = a Receber, 7 = Transferência), com natureza, "
     "banco/agência/conta do cadastro e documento. pendencias: linhas que precisam de ação humana (NÃO lançar). "
-    "fora_do_escopo: linhas que já entram por outra rotina, ex.: baixa de títulos (NÃO lançar). extratos: PDFs lidos.")
+    "fora_do_escopo: linhas que já entram por outra rotina, ex.: baixa de títulos (NÃO lançar). "
+    "baixa_manual: linhas que o financeiro baixa manualmente, só informativo (NÃO lançar). extratos: PDFs lidos.")
 
 
 class PedidoLancamentos(BaseModel):
