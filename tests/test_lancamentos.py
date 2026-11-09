@@ -40,7 +40,7 @@ def test_todo_item_do_plano_vira_um_lancamento(extratos, cadastro):
     plano = planejar(extratos, cadastro, DIA)
     dados = plano_para_integracao(plano, cadastro.constantes)
     assert [l["chave"] for l in dados["lancamentos"]] == [i.chave for i in plano.itens()]
-    assert len(dados["lancamentos"]) == 44   # o mesmo número do plano do robô para esses extratos
+    assert len(dados["lancamentos"]) == 45   # o mesmo número do plano do robô para esses extratos
     assert len(dados["pendencias"]) == len(plano.pendencias)
     assert len(dados["fora_do_escopo"]) == len(plano.fora_do_escopo)
     assert {(l["rotina"], l["opcao"]) for l in dados["lancamentos"]} == {
@@ -127,7 +127,7 @@ def test_pasta_de_extratos_pelo_body_json(cliente, monkeypatch, tmp_path):
     resposta = cliente.post("/lancamentos", headers=CABECALHO, json={"data_movimento": "2026-09-09"})
     assert resposta.status_code == 200
     corpo = resposta.json()
-    assert corpo["data_movimento"] == "2026-09-09" and len(corpo["lancamentos"]) == 44   # = plano da fixture
+    assert corpo["data_movimento"] == "2026-09-09" and len(corpo["lancamentos"]) == 45   # = plano da fixture
     assert {"pendencias", "fora_do_escopo", "extratos"} <= set(corpo)
     assert sorted(abertos) == sorted(e.arquivo for l in _resposta_lida().values() for e in l)   # só a pasta 10-09
 
